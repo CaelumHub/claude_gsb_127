@@ -69,7 +69,7 @@ async def history_ops(board_id: str,
     if author:
         ops = [o for o in ops if (o.get("by") or "") == author or (o.get("site") or "") == author]
     if coalesce:
-        ops = coalesce_moves(ops, config.MOVE_COALESCE_WINDOW_MS * 60)
+        ops = coalesce_moves(ops, config.MOVE_COALESCE_WINDOW_MS)
     return {
         "ops": ops[:limit],
         "count": len(ops),
@@ -88,7 +88,7 @@ async def replay_window(board_id: str,
     await board_ctx(board_id, user, "viewer")
     hist = history_service.for_board(board_id)
     doc = await manager.get_doc(board_id)
-    target = max(0, (doc.head_rev if rev is None else rev) - 1)
+    target = max(0, doc.head_rev if rev is None else rev)
     loop = asyncio.get_running_loop()
     window = await loop.run_in_executor(
         None, lambda: hist.replay_window(target, coalesce=coalesce, page_limit=limit))

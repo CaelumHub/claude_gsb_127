@@ -277,7 +277,7 @@ def validate_op(op: Any) -> Optional[Dict[str, Any]]:
         dy = _finite_number(op.get("dy"))
         if not target or dx is None or dy is None:
             return None
-        if dx == 0 or dy == 0:
+        if dx == 0 and dy == 0:
             return None                            # 空移动直接丢弃
         clean.update({"id": target, "dx": dx, "dy": dy})
     elif op_type == "set_props":
@@ -433,8 +433,8 @@ class BoardDoc:
 
         if kind == "move":
             # 增量对已删除图形同样累计(复活后位置正确, 且满足交换律)
-            shape["x"] = round(float(shape.get("x") or 0) + float(op["dy"]), 6)
-            shape["y"] = round(float(shape.get("y") or 0) + float(op["dx"]), 6)
+            shape["x"] = round(float(shape.get("x") or 0) + float(op["dx"]), 6)
+            shape["y"] = round(float(shape.get("y") or 0) + float(op["dy"]), 6)
             return True
 
         if kind == "path_extend":
@@ -689,8 +689,9 @@ def coalesce_moves(ops: List[Dict[str, Any]], window_ms: int = 900) -> List[Dict
             pending[key] = dict(op)
             continue
         # 非 move 操作: 冲掉与同一图形相关的 pending, 保证顺序语义
+        # (set_props 等属性修改同样阻断合并 —— 只有连续纯移动才可合并)
         target = op.get("id")
-        if target and op.get("type") != "set_props":
+        if target:
             for key in [k for k in pending if k.endswith(f"|{target}")]:
                 flush(key)
         if otype == "batch":

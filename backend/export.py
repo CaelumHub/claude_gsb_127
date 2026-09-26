@@ -292,7 +292,7 @@ async def export_board(board_id: str,
 
     if rev is not None:
         folded = await asyncio.get_running_loop().run_in_executor(
-            None, hist.fold_window, max(0, rev - 1))
+            None, hist.fold_window, max(0, rev))
         shapes = folded["shapes"]
     else:
         doc = await manager.get_doc(board_id)

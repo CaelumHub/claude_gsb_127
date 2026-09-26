@@ -153,7 +153,7 @@ class BoardManager:
                 doc.import_state(snapshot)
             base_rev = doc.head_rev
             max_rev = base_rev
-            for raw in hist.iter_ops(from_rev=base_rev + 1):
+            for raw in hist.iter_ops(from_rev=base_rev):
                 clean = validate_op(raw)
                 if clean:
                     doc.apply_op(clean)
@@ -223,7 +223,7 @@ class BoardManager:
                 accepted.append(clean)
             if accepted:
                 hist = history_service.for_board(board_id)
-                stamped = [op for op in accepted if "rev" in op and op.get("type") != "move"]
+                stamped = [op for op in accepted if "rev" in op]
                 await asyncio.get_running_loop().run_in_executor(
                     None, hist.append_ops, stamped)
                 meta = self.metas.get(board_id)

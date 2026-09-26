@@ -356,7 +356,7 @@ class ConnectionManager:
         acks = [{"op_id": op["op_id"], "rev": op.get("rev"),
                  **({"dup": True} if op.get("dup") else {})} for op in accepted]
         await self.send(client, {"type": "ack", "acks": acks, "head_rev": head_rev})
-        fresh = [op for op in accepted if not op.get("dup") and op.get("type") != "move"]
+        fresh = [op for op in accepted if not op.get("dup")]
         if fresh:
             room.remember(fresh)
             await self.broadcast(client.board_id, {
