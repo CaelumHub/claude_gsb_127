@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>白板编辑 · CoBoard 协同白板</title>
+<link rel="stylesheet" href="/css/common.css">
+<style>
+  body { overflow: hidden; }
+  .ed-topline {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    height: 48px; padding: 0 12px;
+    background: var(--bg-panel); border-bottom: 1px solid var(--border);
+    flex: none;
+  }
+  .ed-board-name {
+    font-weight: 700; font-size: 14.5px; max-width: 220px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    cursor: pointer; padding: 4px 8px; border-radius: 6px;
+  }
+  .ed-board-name:hover { background: var(--bg-hover); }
+  .ed-users { display: flex; align-items: center; }
+  .ed-users .wb-avatar { margin-left: -7px; border: 2px solid var(--bg-panel); cursor: default; }
+  .ed-users .wb-avatar:first-child { margin-left: 0; }
+
+  .ed-body { flex: 1; display: flex; min-height: 0; }
+
+  .ed-rail {
+    width: 52px; flex: none; display: flex; flex-direction: column; align-items: center;
+    gap: 4px; padding: 8px 0; background: var(--bg-panel);
+    border-right: 1px solid var(--border); overflow-y: auto;
+  }
+  .ed-rail .tool {
+    width: 40px; height: 40px; border-radius: 9px; border: 1px solid transparent;
+    background: transparent; color: var(--text-soft); font-size: 18px;
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
+    position: relative; flex: none;
+  }
+  .ed-rail .tool:hover { background: var(--bg-hover); color: var(--text); }
+  .ed-rail .tool.active { background: var(--accent-soft); color: var(--accent-text); border-color: var(--accent); }
+  .ed-rail .tool .kbd {
+    position: absolute; right: 3px; bottom: 1px; font-size: 9px;
+    color: var(--text-mute); font-family: var(--mono);
+  }
+  .ed-rail .sep { width: 28px; height: 1px; background: var(--border); margin: 4px 0; flex: none; }
+
+  .ed-canvas-host { flex: 1; position: relative; min-width: 0; background: #fbfbf9; }
+
+  .ed-side {
+    width: 218px; flex: none; background: var(--bg-panel);
+    border-left: 1px solid var(--border); overflow-y: auto; padding: 12px;
+    display: flex; flex-direction: column; gap: 14px;
+  }
+  .ed-side h4 { font-size: 12px; color: var(--text-mute); font-weight: 600; margin-bottom: 8px; text-transform: uppercase; letter-spacing: .4px; }
+  .swatch-row { display: flex; flex-wrap: wrap; gap: 6px; }
+  .swatch {
+    width: 24px; height: 24px; border-radius: 6px; cursor: pointer;
+    border: 2px solid transparent; outline: 1px solid var(--border);
+  }
+  .swatch.active { border-color: var(--accent); }
+  .side-field { margin-bottom: 10px; }
+  .side-field label { display: flex; justify-content: space-between; font-size: 12px; color: var(--text-soft); margin-bottom: 4px; }
+
+  .ed-status {
+    height: 26px; flex: none; display: flex; align-items: center; gap: 14px;
+    padding: 0 12px; font-size: 11.5px; color: var(--text-mute);
+    background: var(--bg-panel); border-top: 1px solid var(--border);
+    font-family: var(--mono); white-space: nowrap; overflow: hidden;
+  }
+  .ed-status .spacer { flex: 1; }
+
+  .board-picker {
+    position: fixed; inset: 0; z-index: 800; background: var(--bg);
+    display: flex; align-items: center; justify-content: center; padding: 30px;
+  }
+  .board-picker .inner { width: 100%; max-width: 640px; max-height: 80vh; overflow: auto; }
+  .bp-item {
+    display: flex; align-items: center; gap: 12px; padding: 12px 14px;
+    border: 1px solid var(--border); border-radius: var(--radius);
+    background: var(--bg-panel); cursor: pointer; margin-bottom: 8px;
+  }
+  .bp-item:hover { border-color: var(--accent); }
+
+  .shortcut-table { width: 100%; font-size: 12.5px; border-collapse: collapse; }
+  .shortcut-table td { padding: 4px 8px; border-bottom: 1px solid var(--border-soft); }
+  .shortcut-table td:first-child { white-space: nowrap; }
+</style>
+</head>
+<body>
+<div class="wb-page">
+  <!-- 顶部操作条 -->
+  <div class="ed-topline">
+    <span class="ed-board-name" id="board-name" title="点击重命名">…</span>
+    <span class="badge" id="mode-badge">白板</span>
+    <button class="btn sm ghost" id="btn-mindmap" title="在思维导图页打开">🧠 导图模式</button>
+    <div class="vdivider"></div>
+    <button class="btn sm ghost" id="btn-undo" title="撤销 Ctrl+Z" disabled>↩︎</button>
+    <button class="btn sm ghost" id="btn-redo" title="重做 Ctrl+Y" disabled>↪︎</button>
+    <div class="vdivider"></div>
+    <button class="btn sm ghost" id="btn-zoom-out" title="缩小">−</button>
+    <span class="small mono" id="zoom-label" style="min-width:44px;text-align:center">100%</span>
+    <button class="btn sm ghost" id="btn-zoom-in" title="放大">＋</button>
+    <button class="btn sm ghost" id="btn-zoom-fit" title="适应内容">⛶</button>
+    <span class="spacer"></span>
+    <div class="ed-users" id="user-bar"></div>
+    <span class="conn-badge" id="conn-badge"><span class="dot off"></span>连接中…</span>
+    <button class="btn sm ghost" id="btn-share" title="复制邀请链接">🔗 分享</button>
+    <button class="btn sm ghost" id="btn-snapshot" title="手动保存状态快照">💾 快照</button>
+    <button class="btn sm ghost" id="btn-help" title="快捷键帮助">？</button>
+  </div>
+
+  <div class="ed-body">
+    <!-- 工具栏 -->
+    <div class="ed-rail" id="tool-rail"></div>
+
+    <!-- 画布 -->
+    <div class="ed-canvas-host" id="canvas-host"></div>
+
+    <!-- 样式面板 -->
+    <div class="ed-side" id="side-panel">
+      <div>
+        <h4>描边</h4>
+        <div class="swatch-row" id="stroke-swatches"></div>
+        <div class="side-field mt8">
+          <label>粗细 <span id="sw-label">2</span>px</label>
+          <input type="range" id="stroke-width" min="1" max="16" step="1" value="2" style="width:100%">
+        </div>
+      </div>
+      <div>
+        <h4>填充</h4>
+        <div class="swatch-row" id="fill-swatches"></div>
+      </div>
+      <div>
+        <h4>便签色</h4>
+        <div class="swatch-row" id="note-swatches"></div>
+      </div>
+      <div>
+        <h4>文字</h4>
+        <div class="side-field">
+          <label>字号 <span id="fs-label">14</span>px</label>
+          <input type="range" id="font-size" min="10" max="48" step="1" value="14" style="width:100%">
+        </div>
+      </div>
+      <div class="divider"></div>
+      <div id="selection-panel">
+        <h4>选择</h4>
+        <div class="small muted" id="selection-info">未选择图形</div>
+        <div class="row wrap mt8" id="selection-actions" style="display:none">
+          <button class="btn sm" data-act="front">⬆ 顶层</button>
+          <button class="btn sm" data-act="back">⬇ 底层</button>
+          <button class="btn sm" data-act="dup">🧬 副本</button>
+          <button class="btn sm danger" data-act="del">🗑 删除</button>
+        </div>
+      </div>
+      <div class="divider"></div>
+      <div class="small muted" style="line-height:1.7">
+        💡 双击空白处快速创建便签;<br>
+        拖动时协作者可实时看到;<br>
+        同时拖动同一图形时双方位移<b>增量合成</b>, 不会互相覆盖。
+      </div>
+    </div>
+  </div>
+
+  <!-- 状态栏 -->
+  <div class="ed-status">
+    <span id="st-coord">x: — y: —</span>
+    <span id="st-shapes">图形: 0</span>
+    <span id="st-rev">rev: 0</span>
+    <span id="st-pending">待发: 0</span>
+    <span class="spacer"></span>
+    <span id="st-role"></span>
+    <span id="st-fps"></span>
+  </div>
+</div>
+
+<div class="board-picker hidden" id="board-picker">
+  <div class="inner">
+    <div class="row mb16">
+      <div class="wb-page-title">选择要编辑的白板</div>
+      <span class="spacer"></span>
+      <button class="btn primary" id="bp-new">＋ 新建白板</button>
+    </div>
+    <div id="bp-list"></div>
+  </div>
+</div>
+
+<script type="module">
+import { Api } from './js/api.js';
+import { BoardSocket } from './js/ws.js';
+import { CrdtClient, mergeOps, loadShapes } from './js/crdt-client.js';
+import { BoardEngine } from './js/engine.js';
+import { ToolManager } from './js/tools.js';
+import { KIND_LABEL, NOTE_PALETTE, STROKE_PALETTE, syncZCounter } from './js/shapes.js';
+import {
+  confirmDialog, debounce, escapeHtml, fmtRel, getMe, initPage, loginDialog,
+  modal, promptDialog, qs, toast, avatarHtml, colorOf,
+} from './js/ui.js';
+
+/* ---------------------------------------------------------------- 偏好 */
+function loadPrefs() {
+  const defaults = {
+    theme: 'dark', gridDots: true, snap: false, showRemoteCursors: true,
+    showChatNotify: true, defaultTool: 'select', defaultStroke: '#374151',
+    defaultFill: '#ffffff', defaultStrokeWidth: 2, defaultFontSize: 14,
+    noteColorRandom: true,
+  };
+  try { return { ...defaults, ...(JSON.parse(localStorage.getItem('wb_prefs') || '{}')) }; }
+  catch { return defaults; }
+}
+const prefs = loadPrefs();
+
+const me = await initPage('editor', { gate: true, title: '白板编辑' });
+if (!me) throw new Error('未登录');
+
+/* ---------------------------------------------------------------- 白板选择 */
+const boardId = qs('board');
+if (!boardId) {
+  document.getElementById('board-picker').classList.remove('hidden');
+  const listEl = document.getElementById('bp-list');
+  try {
+    const { boards } = await Api.boards.list({ sort: 'updated' });
+    listEl.innerHTML = (boards || []).map((b) => `
+      <div class="bp-item" data-id="${b.id}" data-mode="${b.mode}">
+        <span style="font-size:20px">${b.mode === 'mindmap' ? '🧠' : '🎨'}</span>
+        <span>
+          <div class="bold">${escapeHtml(b.name)}</div>
+          <div class="small muted">${fmtRel(b.updated_at)} · ${b.stats?.shapes ?? 0} 图形 · ${escapeHtml(b.your_role)}</div>
+        </span>
+      </div>`).join('') || '<div class="empty-state"><div class="icon">🗒</div><div class="title">还没有白板, 先创建一个吧</div></div>';
+    listEl.querySelectorAll('.bp-item').forEach((el) => {
+      el.onclick = () => {
+        location.href = el.dataset.mode === 'mindmap'
+          ? `/mindmap.html?board=${el.dataset.id}` : `/editor.html?board=${el.dataset.id}`;
+      };
+    });
+  } catch (err) { toast(err.message, 'error'); }
+  document.getElementById('bp-new').onclick = async () => {
+    const name = await promptDialog('新白板名称', { title: '新建白板', value: '未命名白板' });
+    if (!name) return;
+    const { board } = await Api.boards.create({ name, mode: 'board' });
+    location.href = `/editor.html?board=${board.id}`;
+  };
+  throw new Error('awaiting-board-selection');   // 停止后续初始化
+}
+
+/* ---------------------------------------------------------------- 基础对象 */
+const host = document.getElementById('canvas-host');
+const engine = new BoardEngine(host, {
+  gridDots: prefs.gridDots, page: 'editor',
+  background: '#fbfbf9',
+});
+const shapes = new Map();
+engine.setShapesMap(shapes);
+
+const crdt = new CrdtClient(`c${(Math.random() * 1e6 | 0).toString(36)}${Date.now().toString(36)}`);
+const socket = new BoardSocket(boardId, { page: 'editor' });
+crdt.onOps = (ops) => socket.sendOps(ops);
+
+const tools = new ToolManager({
+  engine, crdt, socket, shapes,
+  opts: {
+    readOnly: false, snap: prefs.snap, me,
+    style: {
+      stroke: prefs.defaultStroke, fill: prefs.defaultFill,
+      strokeWidth: prefs.defaultStrokeWidth, fontSize: prefs.defaultFontSize,
+    },
+    onPresence: (p) => socket.sendPresence(p),
+    onSelectionChange: () => renderSelectionPanel(),
+    onHistoryChange: () => updateHistoryButtons(),
+    onToolChange: (tool) => highlightTool(tool),
+  },
+});
+
+/* ---------------------------------------------------------------- 顶栏与状态 */
+let boardMeta = null;
+let myRole = 'viewer';
+
+const $ = (id) => document.getElementById(id);
+
+function setConnBadge(status, extra = {}) {
+  const el = $('conn-badge');
+  const map = {
+    open: ['on', '已连接'], connecting: ['off', '连接中…'],
+    reconnecting: ['off', `重连中(${extra.retry || 1})…`], closed: ['off', '离线'],
+    idle: ['off', '未连接'],
+  };
+  const [cls, text] = map[status] || ['off', status];
+  el.innerHTML = `<span class="dot ${cls}"></span>${text}${extra.fatal ? ' · 无权限' : ''}`;
+}
+window.addEventListener('wb:conn-status', (e) => {
+  if (e.detail.boardId === boardId) setConnBadge(e.detail.status, e.detail);
+  $('st-pending').textContent = `待发: ${socket.pendingCount()}`;
+});
+
+function updateHistoryButtons() {
+  $('btn-undo').disabled = !tools.crdt.canUndo();
+  $('btn-redo').disabled = !tools.crdt.canRedo();
+}
+
+function updateStats() {
+  let count = 0;
+  for (const s of shapes.values()) if (!s.deleted && s.kind !== 'ghost') count += 1;
+  $('st-shapes').textContent = `图形: ${count}`;
+  $('st-rev').textContent = `rev: ${socket.lastRev}`;
+  $('st-pending').textContent = `待发: ${socket.pendingCount()}`;
+}
+
+function renderUsers(clients) {
+  const bar = $('user-bar');
+  const entries = Object.values(clients || {});
+  bar.innerHTML = entries.slice(0, 6).map((c) =>
+    avatarHtml({ display_name: c.display_name || c.user, color: c.color || colorOf(c.user) }, 'sm')).join('')
+    + (entries.length > 6 ? `<span class="badge sm">+${entries.length - 6}</span>` : '');
+  bar.title = entries.map((c) => `${c.display_name || c.user}(${c.page})`).join(', ');
+}
+
+/* ---------------------------------------------------------------- 工具栏 */
+const TOOLS = [
+  { id: 'select', icon: '➤', label: '选择 (V)' , kbd: 'V' },
+  { id: 'pan', icon: '✋', label: '平移 (H/空格)', kbd: 'H' },
+  { sep: true },
+  { id: 'pen', icon: '✏️', label: '手绘 (P)', kbd: 'P' },
+  { id: 'line', icon: '╱', label: '直线 (L)', kbd: 'L' },
+  { id: 'arrow', icon: '↗', label: '箭头 (A)', kbd: 'A' },
+  { id: 'edge', icon: '🔗', label: '连线 (C): 依次点两个图形', kbd: 'C' },
+  { sep: true },
+  { id: 'rect', icon: '▭', label: '矩形 (R)', kbd: 'R' },
+  { id: 'ellipse', icon: '◯', label: '椭圆 (O)', kbd: 'O' },
+  { id: 'diamond', icon: '◇', label: '菱形 (D)', kbd: 'D' },
+  { id: 'note', icon: '🗒', label: '便签 (N)', kbd: 'N' },
+  { id: 'text', icon: 'T', label: '文本 (T)', kbd: 'T' },
+  { sep: true },
+  { id: 'eraser', icon: '🧽', label: '橡皮 (X)', kbd: 'X' },
+];
+const rail = $('tool-rail');
+rail.innerHTML = TOOLS.map((t) => t.sep
+  ? '<div class="sep"></div>'
+  : `<button class="tool" data-tool="${t.id}" title="${t.label}">${t.icon}<span class="kbd">${t.kbd}</span></button>`).join('');
+rail.querySelectorAll('[data-tool]').forEach((btn) => {
+  btn.onclick = () => tools.setTool(btn.dataset.tool);
+});
+function highlightTool(tool) {
+  rail.querySelectorAll('[data-tool]').forEach((b) => b.classList.toggle('active', b.dataset.tool === tool));
+}
+tools.setTool(prefs.defaultTool in Object.fromEntries(TOOLS.filter((t) => !t.sep).map((t) => [t.id, 1])) ? prefs.defaultTool : 'select');
+
+/* ---------------------------------------------------------------- 样式面板 */
+const strokeHost = $('stroke-swatches');
+strokeHost.innerHTML = STROKE_PALETTE.map((c) =>
+  `<span class="swatch" data-c="${c}" style="background:${c}"></span>`).join('')
+  + `<input type="color" id="stroke-custom" title="自定义" value="${prefs.defaultStroke}">`;
+strokeHost.querySelectorAll('.swatch').forEach((el) => {
+  el.onclick = () => {
+    tools.setStyle({ stroke: el.dataset.c });
+    strokeHost.querySelectorAll('.swatch').forEach((s) => s.classList.toggle('active', s === el));
+  };
+});
+$('stroke-custom').oninput = (e) => tools.setStyle({ stroke: e.target.value });
+
+const fillHost = $('fill-swatches');
+const FILLS = ['#ffffff', '#e8f1ff', '#fff4e0', '#ffe3e3', '#e6fffb', '#f3e8ff', '#fffbe6', 'transparent'];
+fillHost.innerHTML = FILLS.map((c) =>
+  `<span class="swatch" data-c="${c}" style="background:${c === 'transparent' ? 'repeating-conic-gradient(#ccc 0 25%, #fff 0 50%) 50%/10px 10px' : c}" title="${c}"></span>`).join('')
+  + `<input type="color" id="fill-custom" title="自定义">`;
+fillHost.querySelectorAll('.swatch').forEach((el) => {
+  el.onclick = () => {
+    tools.setStyle({ fill: el.dataset.c });
+    fillHost.querySelectorAll('.swatch').forEach((s) => s.classList.toggle('active', s === el));
+  };
+});
+$('fill-custom').oninput = (e) => tools.setStyle({ fill: e.target.value });
+
+const noteHost = $('note-swatches');
+noteHost.innerHTML = NOTE_PALETTE.map((c) =>
+  `<span class="swatch" data-c="${c}" style="background:${c}"></span>`).join('');
+noteHost.querySelectorAll('.swatch').forEach((el) => {
+  el.onclick = () => {
+    // 便签色: 选中便签时改其 fill, 否则设为后续默认
+    if (engine.selection.size) tools.applyStyleToSelection({ fill: el.dataset.c });
+    else tools.setStyle({ fill: el.dataset.c });
+    noteHost.querySelectorAll('.swatch').forEach((s) => s.classList.toggle('active', s === el));
+  };
+});
+
+$('stroke-width').oninput = (e) => {
+  $('sw-label').textContent = e.target.value;
+  tools.setStyle({ strokeWidth: Number(e.target.value) });
+};
+$('font-size').oninput = (e) => {
+  $('fs-label').textContent = e.target.value;
+  tools.setStyle({ fontSize: Number(e.target.value) });
+};
+
+function renderSelectionPanel() {
+  const info = $('selection-info');
+  const actions = $('selection-actions');
+  const sel = [...engine.selection].map((id) => shapes.get(id)).filter((s) => s && !s.deleted);
+  if (!sel.length) {
+    info.textContent = '未选择图形';
+    actions.style.display = 'none';
+    return;
+  }
+  actions.style.display = 'flex';
+  if (sel.length === 1) {
+    const s = sel[0];
+    info.innerHTML = `<b>${KIND_LABEL[s.kind] || s.kind}</b> · <span class="mono">${escapeHtml(String(s.id).slice(0, 12))}</span><br>
+      位置 ${Math.round(s.x)}, ${Math.round(s.y)} · 尺寸 ${Math.round(s.w || 0)}×${Math.round(s.h || 0)}<br>
+      作者 ${escapeHtml(s.meta?.author || '—')}`;
+    // 样式控件同步选中图形
+    $('stroke-width').value = s.strokeWidth ?? 2;
+    $('sw-label').textContent = s.strokeWidth ?? 2;
+    if (s.fontSize) { $('font-size').value = s.fontSize; $('fs-label').textContent = s.fontSize; }
+  } else {
+    info.innerHTML = `已选择 <b>${sel.length}</b> 个图形`;
+  }
+  updateHistoryButtons();
+}
+$('selection-actions').querySelectorAll('[data-act]').forEach((btn) => {
+  btn.onclick = () => {
+    const act = btn.dataset.act;
+    if (act === 'front') tools.bring('front');
+    if (act === 'back') tools.bring('back');
+    if (act === 'dup') tools.duplicate();
+    if (act === 'del') tools.deleteSelection();
+    renderSelectionPanel();
+  };
+});
+
+/* ---------------------------------------------------------------- 顶栏动作 */
+$('btn-undo').onclick = () => { tools.undo(); afterLocalChange(); };
+$('btn-redo').onclick = () => { tools.redo(); afterLocalChange(); };
+$('btn-zoom-in').onclick = () => { engine.zoomAt(1.25, engine.width / 2, engine.height / 2); updateZoomLabel(); };
+$('btn-zoom-out').onclick = () => { engine.zoomAt(0.8, engine.width / 2, engine.height / 2); updateZoomLabel(); };
+$('btn-zoom-fit').onclick = () => { engine.fitToContent(); updateZoomLabel(); };
+function updateZoomLabel() { $('zoom-label').textContent = `${Math.round(engine.cam.k * 100)}%`; }
+engine.opts.onZoomChange = null;
+tools.opts.onZoomChange = () => updateZoomLabel();
+
+$('board-name').onclick = async () => {
+  if (!['owner', 'editor'].includes(myRole)) return toast('无重命名权限', 'warn');
+  const name = await promptDialog('白板名称', { value: boardMeta?.name || '' });
+  if (!name) return;
+  try {
+    const { board } = await Api.boards.patch(boardId, { name });
+    boardMeta = board;
+    $('board-name').textContent = board.name;
+    document.title = `${board.name} · 白板编辑`;
+    toast('已重命名', 'success');
+  } catch (err) { toast(err.message, 'error'); }
+};
+
+$('btn-mindmap').onclick = () => { location.href = `/mindmap.html?board=${boardId}`; };
+
+$('btn-share').onclick = () => {
+  modal({
+    title: '分享与权限',
+    body: `
+      <div class="field"><label>邀请链接(已登录用户可打开)</label>
+        <div class="row"><input class="input" readonly value="${location.origin}/editor.html?board=${boardId}" id="invite-link">
+        <button class="btn primary sm" id="copy-link">复制</button></div></div>
+      <div class="small muted">成员的具体角色(编辑/评论/只读)在
+        <a href="/permissions.html?board=${boardId}">权限页</a> 管理。</div>`,
+    onMount(el, close) {
+      el.querySelector('#copy-link').onclick = async () => {
+        try { await navigator.clipboard.writeText(el.querySelector('#invite-link').value); toast('链接已复制', 'success'); }
+        catch { el.querySelector('#invite-link').select(); document.execCommand('copy'); toast('链接已复制', 'success'); }
+      };
+    },
+  });
+};
+
+$('btn-snapshot').onclick = async () => {
+  try {
+    const data = await Api.boards.snapshot(boardId);
+    toast(`快照已保存 @rev ${data.snapshot_rev}`, 'success');
+  } catch (err) { toast(err.message || '快照失败', 'error'); }
+};
+
+$('btn-help').onclick = () => {
+  modal({
+    title: '快捷键',
+    width: 'wide',
+    body: `<table class="shortcut-table">
+      <tr><td><kbd>V</kbd>/<kbd>H</kbd>/<kbd>P</kbd></td><td>选择 / 平移 / 手绘</td>
+          <td><kbd>R</kbd>/<kbd>O</kbd>/<kbd>D</kbd></td><td>矩形 / 椭圆 / 菱形</td></tr>
+      <tr><td><kbd>N</kbd>/<kbd>T</kbd></td><td>便签 / 文本</td>
+          <td><kbd>L</kbd>/<kbd>A</kbd>/<kbd>C</kbd></td><td>直线 / 箭头 / 连线</td></tr>
+      <tr><td><kbd>X</kbd></td><td>橡皮(拖动擦除)</td>
+          <td><kbd>空格</kbd>+拖动 / 中键</td><td>平移画布</td></tr>
+      <tr><td><kbd>Ctrl</kbd>+滚轮</td><td>缩放</td>
+          <td><kbd>Ctrl+Z</kbd> / <kbd>Ctrl+Y</kbd></td><td>撤销 / 重做</td></tr>
+      <tr><td><kbd>Ctrl+C/V/D/A</kbd></td><td>复制/粘贴/副本/全选</td>
+          <td><kbd>Delete</kbd></td><td>删除选中</td></tr>
+      <tr><td><kbd>↑↓←→</kbd></td><td>微移(Shift=10px)</td>
+          <td><kbd>Ctrl+]</kbd> / <kbd>Ctrl+[</kbd></td><td>置顶 / 置底</td></tr>
+      <tr><td>双击空白</td><td>快速便签</td>
+          <td>双击图形</td><td>编辑文本(Enter 提交, Esc 取消)</td></tr>
+    </table>`,
+  });
+};
+
+/* ---------------------------------------------------------------- 协同管线 */
+function markAllPathsDirty() {
+  for (const s of shapes.values()) if (s.kind === 'path') s._pathDirty = true;
+}
+
+function invalidateFromOps(ops) {
+  for (const op of ops || []) {
+    const list = op.type === 'batch' ? (op.ops || []) : [op];
+    for (const sub of list) {
+      if (['path_extend', 'truncate_path', 'move', 'set_props', 'add_shape'].includes(sub.type)) {
+        const id = sub.id || sub.shape?.id;
+        const s = shapes.get(id);
+        if (s && s.kind === 'path') s._pathDirty = true;
+      }
+    }
+  }
+}
+
+function afterLocalChange() {
+  updateStats();
+  renderSelectionPanel();
+  scheduleThumbnail();
+}
+
+socket.on('welcome', async (msg) => {
+  myRole = msg.role || 'viewer';
+  $('st-role').textContent = `角色: ${myRole}`;
+  if (msg.board) {
+    boardMeta = { ...(boardMeta || {}), ...msg.board };
+    $('board-name').textContent = boardMeta.name || '…';
+    document.title = `${boardMeta.name} · 白板编辑`;
+    $('mode-badge').textContent = boardMeta.mode === 'mindmap' ? '思维导图' : '白板';
+    if (boardMeta.mode === 'mindmap') {
+      // 思维导图模式的白板建议去专门页面(仍可在此自由编辑)
+      $('btn-mindmap').classList.add('primary');
+    }
+  }
+  if (msg.state) {
+    shapes.clear();
+    for (const s of msg.state.shapes || []) shapes.set(s.id, s);
+    engine.rebuildIndex();
+    syncZCounter(shapes);
+  } else if (msg.catchup?.ops?.length) {
+    for (const op of msg.catchup.ops) crdt.witness(op);
+    const touched = mergeOps(shapes, msg.catchup.ops);
+    invalidateFromOps(msg.catchup.ops);
+    engine.onShapesChanged(touched);
+    toast(`已补发 ${msg.catchup.ops.length} 个离线期间的操作`, 'success');
+  }
+  renderUsers(msg.clients);
+  tools.readOnly = myRole === 'viewer' || myRole === 'commenter';
+  if (tools.readOnly) {
+    toast(myRole === 'commenter' ? '你是评论成员: 可查看与聊天, 不可编辑' : '你是只读成员: 仅可查看', 'warn', 4200);
+  }
+  if (!engine._userMoved) { engine.fitToContent(); }
+  engine.markDirty();
+  updateStats();
+  markAllPathsDirty();
+});
+
+socket.on('ops', (msg) => {
+  for (const op of msg.ops || []) crdt.witness(op);
+  const touched = mergeOps(shapes, msg.ops || []);
+  invalidateFromOps(msg.ops || []);
+  engine.onShapesChanged(touched);
+  updateStats();
+  scheduleThumbnail();
+});
+
+socket.on('ack', () => updateStats());
+
+socket.on('cursor', (msg) => {
+  if (!prefs.showRemoteCursors) return;
+  const key = `${msg.user}@${msg.client_id}`;
+  engine.updateRemoteCursor(key, {
+    cursor: msg.cursor, color: msg.color || colorOf(msg.user),
+    name: msg.display_name || msg.user, tool: msg.tool,
+    selection: msg.selection, page: msg.page,
+  });
+});
+
+socket.on('join', (msg) => {
+  toast(`${msg.display_name || msg.user} 加入了白板`, 'info', 2200);
+});
+socket.on('leave', (msg) => {
+  const key = Object.keys(engine.remoteCursors).find((k) => k.startsWith(`${msg.user}@`));
+  if (key) engine.removeRemoteCursor(key);
+});
+
+socket.on('presence', (msg) => renderUsers(msg.clients));
+socket.on('hello_ok', (msg) => renderUsers(msg.clients));
+
+socket.on('snapshot_saved', (msg) => {
+  $('st-rev').textContent = `rev: ${socket.lastRev}`;
+});
+
+socket.on('chat', (msg) => {
+  if (!prefs.showChatNotify) return;
+  const m = msg.message || {};
+  if (m.user === me.username) return;
+  toast(`💬 ${m.display_name || m.user}: ${String(m.text || '').slice(0, 60)}`, 'info', 3500);
+});
+
+socket.on('error', (msg) => {
+  if (msg.code === 'read_only') toast(msg.message || '只读', 'warn');
+  else if (msg.code !== 'bad_json') toast(`协同错误: ${msg.message || msg.code}`, 'error');
+});
+
+socket.on('fatal', async (msg) => {
+  if (msg.code === 4401) {
+    if (await loginDialog('会话已过期, 请重新登录')) location.reload();
+  } else if (msg.code === 4403) {
+    toast('你没有该白板的访问权限', 'error', 6000);
+  }
+});
+
+crdt.onOps = (ops) => {
+  socket.sendOps(ops);
+  updateStats();
+};
+
+/* ---------------------------------------------------------------- 初始加载 */
+try {
+  const data = await Api.boards.state(boardId);
+  boardMeta = data.board;
+  myRole = data.your_role;
+  $('board-name').textContent = boardMeta.name || '未命名白板';
+  document.title = `${boardMeta.name} · 白板编辑`;
+  $('mode-badge').textContent = boardMeta.mode === 'mindmap' ? '思维导图' : '白板';
+  $('st-role').textContent = `角色: ${myRole}`;
+  for (const s of data.shapes || []) shapes.set(s.id, s);
+  socket.lastRev = data.rev || 0;
+  engine.rebuildIndex();
+  syncZCounter(shapes);
+  engine.fitToContent();
+  updateStats();
+  tools.readOnly = myRole === 'viewer' || myRole === 'commenter';
+} catch (err) {
+  if (err.status === 403) {
+    document.body.innerHTML = '<div class="empty-state" style="height:100vh"><div class="icon">🔒</div><div class="title">无权访问该白板</div><div>请向所有者申请权限, 或<a href="/permissions.html">查看权限页</a></div></div>';
+    throw err;
+  }
+  if (err.status === 404) {
+    document.body.innerHTML = '<div class="empty-state" style="height:100vh"><div class="icon">❓</div><div class="title">白板不存在或已删除</div><div><a href="/index.html">返回白板列表</a></div></div>';
+    throw err;
+  }
+  toast(err.message || '加载白板失败', 'error');
+}
+socket.connect();
+
+/* ---------------------------------------------------------------- 缩略图 & 状态刷新 */
+const scheduleThumbnail = debounce(async () => {
+  if (!['owner', 'editor'].includes(myRole)) return;
+  try {
+    const canvas = document.createElement('canvas');
+    const alive = [...shapes.values()].filter((s) => !s.deleted && s.kind !== 'ghost');
+    BoardEngine.renderStatic(canvas, alive, { maxW: 320, maxH: 200, padding: 20 });
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.55);
+    if (dataUrl.length < 55000) await Api.boards.patch(boardId, { thumbnail: dataUrl });
+  } catch { /* 缩略图失败不影响编辑 */ }
+}, 45_000);
+
+window.addEventListener('beforeunload', () => {
+  // 尽力而为: keepalive 让请求在页面卸载时仍能发出
+  if (!['owner', 'editor'].includes(myRole)) return;
+  try {
+    const canvas = document.createElement('canvas');
+    const alive = [...shapes.values()].filter((s) => !s.deleted && s.kind !== 'ghost');
+    BoardEngine.renderStatic(canvas, alive, { maxW: 320, maxH: 200, padding: 20 });
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.55);
+    if (dataUrl.length < 55000) {
+      fetch(`/api/boards/${boardId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'X-Auth-Token': Api.token || '' },
+        body: JSON.stringify({ thumbnail: dataUrl }),
+        keepalive: true,
+      }).catch(() => {});
+    }
+  } catch { /* 忽略 */ }
+});
+
+/* 坐标/缩放状态栏 */
+host.addEventListener('pointermove', (e) => {
+  const rect = host.getBoundingClientRect();
+  const w = engine.screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
+  $('st-coord').textContent = `x: ${Math.round(w.x)} y: ${Math.round(w.y)}`;
+});
+host.addEventListener('wheel', () => setTimeout(updateZoomLabel, 30), { passive: true });
+engine._userMoved = false;
+const origPan = engine.panBy.bind(engine);
+engine.panBy = (...args) => { engine._userMoved = true; origPan(...args); };
+const origZoom = engine.zoomAt.bind(engine);
+engine.zoomAt = (...args) => { engine._userMoved = true; updateZoomLabel(); origZoom(...args); };
+
+setInterval(updateStats, 2000);
+updateHistoryButtons();
+updateZoomLabel();
+renderSelectionPanel();
+</script>
+</body>
+</html>

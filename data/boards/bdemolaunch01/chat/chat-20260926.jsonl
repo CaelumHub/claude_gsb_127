@@ -1,0 +1,4 @@
+{"id":"mseed003","board_id":"bdemolaunch01","user":"demo","display_name":"演示管理员","color":"#5b8ff9","text":"@bob 回滚预案记得补监控链接","kind":"msg","ts":1790364125248}
+{"id":"mseed004","board_id":"bdemolaunch01","user":"bob","display_name":"Bob","color":"#f0884d","text":"已补, 顺手把便签挪到了右下角","kind":"msg","ts":1790365565248}
+{"id":"mseed005","board_id":"bdemolaunch01","user":"alice","display_name":"Alice","color":"#61c0a8","text":"刚才我们俩同时拖了同一张便签, 位置居然合并对了 😄","kind":"msg","ts":1790367005248}
+{"id":"mseed006","board_id":"bdemolaunch01","user":"demo","display_name":"演示管理员","color":"#5b8ff9","text":"这就是增量 CRDT 的效果, 移动是可交换的 delta","kind":"msg","ts":1790367725248}

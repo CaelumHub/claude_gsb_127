@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>历史回放 · CoBoard 协同白板</title>
+<link rel="stylesheet" href="/css/common.css">
+<style>
+  body { overflow: hidden; }
+  .rp-topline {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    height: 48px; padding: 0 12px; flex: none;
+    background: var(--bg-panel); border-bottom: 1px solid var(--border);
+  }
+  .rp-body { flex: 1; display: flex; min-height: 0; }
+  .rp-left { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .rp-canvas-host { flex: 1; position: relative; min-height: 0; background: #fbfbf9; }
+  .rp-readonly-tag {
+    position: absolute; left: 12px; top: 12px; z-index: 20;
+    background: var(--bg-panel); border: 1px solid var(--border); color: var(--text-soft);
+    border-radius: 20px; padding: 3px 12px; font-size: 12px; box-shadow: var(--shadow);
+  }
+
+  .rp-transport {
+    flex: none; padding: 8px 14px 10px; background: var(--bg-panel);
+    border-top: 1px solid var(--border);
+  }
+  .rp-timeline { width: 100%; height: 46px; border-radius: 8px; cursor: pointer; display: block; }
+  .rp-controls { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+  .rp-controls .btn { min-width: 38px; }
+  .rp-revlabel { font-family: var(--mono); font-size: 13px; color: var(--text-soft); min-width: 150px; text-align: center; }
+  .rp-legend { display: flex; gap: 10px; flex-wrap: wrap; margin-left: auto; font-size: 11px; color: var(--text-mute); }
+  .rp-legend span { display: inline-flex; align-items: center; gap: 4px; }
+  .rp-legend i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+
+  .rp-side {
+    width: 300px; flex: none; display: flex; flex-direction: column;
+    background: var(--bg-panel); border-left: 1px solid var(--border); min-height: 0;
+  }
+  .rp-side .tabs { flex: none; padding: 0 8px; }
+  .rp-tab-body { flex: 1; overflow: auto; min-height: 0; padding: 10px; }
+  .rp-op-item {
+    display: flex; align-items: center; gap: 8px; padding: 6px 8px;
+    border-radius: 6px; font-size: 12px; cursor: pointer; color: var(--text-soft);
+  }
+  .rp-op-item:hover { background: var(--bg-hover); }
+  .rp-op-item.current { background: var(--accent-soft); color: var(--accent-text); }
+  .rp-op-item .otype {
+    flex: none; min-width: 52px; text-align: center; padding: 1px 6px;
+    border-radius: 4px; font-size: 10.5px; color: #fff; font-weight: 600;
+  }
+  .rp-op-item .orev { font-family: var(--mono); font-size: 10.5px; color: var(--text-mute); flex: none; }
+  .rp-op-item .odesc { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rp-filter-row { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+  .rp-filter-chip {
+    padding: 2px 9px; border-radius: 12px; font-size: 11px; cursor: pointer;
+    border: 1px solid var(--border); color: var(--text-mute); user-select: none;
+  }
+  .rp-filter-chip.active { border-color: var(--accent); color: var(--accent-text); background: var(--accent-soft); }
+  .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .stat-box { background: var(--bg-elevated); border-radius: 8px; padding: 10px; }
+  .stat-box .num { font-size: 19px; font-weight: 800; color: var(--accent-text); }
+  .stat-box .lbl { font-size: 11px; color: var(--text-mute); }
+  .bar-row { display: flex; align-items: center; gap: 8px; font-size: 12px; margin-bottom: 6px; color: var(--text-soft); }
+  .bar-row .bar { flex: 1; height: 8px; background: var(--bg-elevated); border-radius: 4px; overflow: hidden; }
+  .bar-row .bar > i { display: block; height: 100%; border-radius: 4px; }
+  .bar-row .n { width: 46px; text-align: right; font-family: var(--mono); font-size: 11px; }
+</style>
+</head>
+<body>
+<div class="wb-page">
+  <div class="rp-topline">
+    <span class="bold">⏱ 历史回放</span>
+    <select class="select" id="board-select" style="width:230px;padding:5px 10px"></select>
+    <span class="badge" id="mode-badge">—</span>
+    <span class="spacer"></span>
+    <span class="small muted" id="snapshot-note"></span>
+    <button class="btn sm ghost" id="btn-compact" title="物理压缩归档分片(合并连续移动、丢弃被覆盖的中间属性; 终态等价)">🗜 压缩归档历史</button>
+    <button class="btn sm ghost" id="btn-goto-head" title="跳到最新状态">⏭ 最新</button>
+    <button class="btn sm ghost" id="btn-open-board">打开白板 →</button>
+  </div>
+
+  <div class="rp-body">
+    <div class="rp-left">
+      <div class="rp-canvas-host" id="canvas-host">
+        <span class="rp-readonly-tag">🔒 回放模式 · 只读渲染</span>
+      </div>
+      <div class="rp-transport">
+        <canvas class="rp-timeline" id="timeline"></canvas>
+        <div class="rp-controls">
+          <button class="btn sm" id="btn-start" title="回到开头">⏮</button>
+          <button class="btn sm" id="btn-step-back" title="后退 20 个操作">-20</button>
+          <button class="btn sm" id="btn-step-prev" title="上一步">◂</button>
+          <button class="btn primary" id="btn-play" style="min-width:64px">▶ 播放</button>
+          <button class="btn sm" id="btn-step-next" title="下一步">▸</button>
+          <button class="btn sm" id="btn-step-fwd" title="前进 20 个操作">+20</button>
+          <select class="select" id="speed" style="width:86px;padding:5px 8px">
+            <option value="0.5">0.5x</option>
+            <option value="1">1x</option>
+            <option value="2" selected>2x</option>
+            <option value="4">4x ⚡</option>
+            <option value="8">8x ⚡</option>
+            <option value="16">16x ⚡</option>
+            <option value="32">32x ⚡</option>
+          </select>
+          <span class="rp-revlabel" id="rev-label">rev 0 / 0</span>
+          <div class="rp-legend" id="legend"></div>
+        </div>
+      </div>
+    </div>
+
+    <aside class="rp-side">
+      <div class="tabs">
+        <div class="tab active" data-tab="ops">操作流</div>
+        <div class="tab" data-tab="stats">统计</div>
+      </div>
+      <div class="rp-tab-body" id="tab-ops">
+        <div class="rp-filter-row" id="type-filters"></div>
+        <div class="row mb8">
+          <select class="select" id="author-filter" style="flex:1;padding:4px 8px;font-size:12px">
+            <option value="">全部成员</option>
+          </select>
+        </div>
+        <div id="op-list"></div>
+      </div>
+      <div class="rp-tab-body hidden" id="tab-stats">
+        <div class="stat-grid mb16">
+          <div class="stat-box"><div class="num" id="s-total">—</div><div class="lbl">操作总数</div></div>
+          <div class="stat-box"><div class="num" id="s-shards">—</div><div class="lbl">日志分片(按小时)</div></div>
+          <div class="stat-box"><div class="num" id="s-snaps">—</div><div class="lbl">状态快照</div></div>
+          <div class="stat-box"><div class="num" id="s-size">—</div><div class="lbl">日志体积</div></div>
+        </div>
+        <h4 class="small muted mb8">操作类型分布</h4>
+        <div id="s-types"></div>
+        <h4 class="small muted mb8 mt16">成员贡献</h4>
+        <div id="s-users"></div>
+        <div class="divider"></div>
+        <div class="small muted" id="s-shard-detail"></div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<script type="module">
+import { Api } from './js/api.js';
+import { BoardEngine } from './js/engine.js';
+import { ReplayPlayer, OP_TYPE_META } from './js/replay.js';
+import {
+  confirmDialog, escapeHtml, fmtBytes, fmtNum, fmtTime, initPage, qs, toast,
+} from './js/ui.js';
+
+const me = await initPage('replay', { gate: true, title: '历史回放' });
+if (!me) throw new Error('未登录');
+
+const $ = (id) => document.getElementById(id);
+let player = null;
+let currentBoard = qs('board') || localStorage.getItem('wb_replay_board') || '';
+let typeFilter = new Set();
+let authorFilter = '';
+let cachedOps = [];
+
+/* ---------------------------------------------------------------- 图例与筛选 */
+$('legend').innerHTML = Object.entries(OP_TYPE_META)
+  .filter(([t]) => ['add_shape', 'move', 'set_props', 'delete_shape', 'batch', 'path_extend'].includes(t))
+  .map(([t, m]) => `<span><i style="background:${m.color}"></i>${m.label}</span>`).join('');
+
+$('type-filters').innerHTML = Object.entries(OP_TYPE_META)
+  .map(([t, m]) => `<span class="rp-filter-chip" data-t="${t}" style="border-color:${m.color}55">${m.label}</span>`)
+  .join('');
+$('type-filters').querySelectorAll('.rp-filter-chip').forEach((chip) => {
+  chip.onclick = () => {
+    const t = chip.dataset.t;
+    if (typeFilter.has(t)) { typeFilter.delete(t); chip.classList.remove('active'); }
+    else { typeFilter.add(t); chip.classList.add('active'); }
+    renderOpList();
+  };
+});
+$('author-filter').onchange = (e) => { authorFilter = e.target.value; renderOpList(); };
+
+/* ---------------------------------------------------------------- tabs */
+document.querySelectorAll('.tabs .tab').forEach((tab) => {
+  tab.onclick = () => {
+    document.querySelectorAll('.tabs .tab').forEach((t) => t.classList.toggle('active', t === tab));
+    $('tab-ops').classList.toggle('hidden', tab.dataset.tab !== 'ops');
+    $('tab-stats').classList.toggle('hidden', tab.dataset.tab !== 'stats');
+  };
+});
+
+/* ---------------------------------------------------------------- 白板选择 */
+async function loadBoards() {
+  const { boards } = await Api.boards.list({ sort: 'updated' });
+  $('board-select').innerHTML = (boards || []).map((b) =>
+    `<option value="${b.id}" ${b.id === currentBoard ? 'selected' : ''}>${b.mode === 'mindmap' ? '🧠' : '🎨'} ${escapeHtml(b.name)}</option>`).join('')
+    || '<option value="">(无可见白板)</option>';
+  if (!currentBoard && boards?.length) currentBoard = boards[0].id;
+  return boards || [];
+}
+
+$('board-select').onchange = (e) => {
+  currentBoard = e.target.value;
+  localStorage.setItem('wb_replay_board', currentBoard);
+  initPlayer();
+};
+
+/* ---------------------------------------------------------------- 引擎与播放器 */
+const engine = new BoardEngine($('canvas-host'), {
+  readOnly: true, background: '#fbfbf9', gridDots: true, mindLinks: true,
+});
+
+function describeOp(op) {
+  if (!op) return '';
+  const who = op.by || op.site || '?';
+  switch (op.type) {
+    case 'add_shape': return `${who} 添加 ${op.shape?.kind || '图形'}「${(op.shape?.text || '').slice(0, 10)}」`;
+    case 'delete_shape': return `${who} 删除图形`;
+    case 'restore_shape': return `${who} 恢复图形`;
+    case 'move': return `${who} 移动 (${Math.round(op.dx)}, ${Math.round(op.dy)})${op._merged ? ` ×${op._merged}合并` : ''}`;
+    case 'set_props': return `${who} 修改 ${Object.keys(op.props || {}).join('/')}`;
+    case 'reorder': return `${who} 调整层级 z=${Math.round(op.z)}`;
+    case 'reparent': return `${who} 挂载节点`;
+    case 'path_extend': return `${who} 笔迹 +${(op.points || []).length}点`;
+    case 'truncate_path': return `${who} 截断笔迹`;
+    case 'batch': return `${who} 批量 ${(op.ops || []).length} 项`;
+    default: return op.type;
+  }
+}
+
+function renderOpList(aroundRev = null) {
+  const host = $('op-list');
+  const rev = aroundRev ?? player?.currentRev ?? 0;
+  let ops = cachedOps;
+  if (typeFilter.size) ops = ops.filter((o) => typeFilter.has(o.type));
+  if (authorFilter) ops = ops.filter((o) => (o.by || '') === authorFilter);
+  // 以当前 rev 为中心取窗口
+  const idx = ops.findIndex((o) => (o.rev || 0) > rev);
+  const start = Math.max(0, (idx === -1 ? ops.length : idx) - 40);
+  const slice = ops.slice(start, start + 90);
+  host.innerHTML = slice.map((op) => {
+    const meta = OP_TYPE_META[op.type] || OP_TYPE_META.batch;
+    const isCurrent = (op.rev || 0) === rev;
+    return `<div class="rp-op-item ${isCurrent ? 'current' : ''}" data-rev="${op.rev}">
+      <span class="otype" style="background:${meta.color}">${meta.label}</span>
+      <span class="orev">r${op.rev}</span>
+      <span class="odesc" title="${escapeHtml(describeOp(op))}">${escapeHtml(describeOp(op))}</span>
+      <span class="orev">${fmtTime(op.ts).slice(5)}</span>
+    </div>`;
+  }).join('') || '<div class="empty-state small" style="padding:26px"><div class="icon">🈳</div><div>无匹配操作</div></div>';
+  host.querySelectorAll('.rp-op-item').forEach((el) => {
+    el.onclick = () => seek(Number(el.dataset.rev));
+  });
+  const currentEl = host.querySelector('.current');
+  if (currentEl) currentEl.scrollIntoView({ block: 'nearest' });
+}
+
+async function loadOpsForList() {
+  try {
+    const data = await Api.history.ops(currentBoard, { from_rev: 0, limit: 2000 });
+    cachedOps = data.ops || [];
+    const authors = [...new Set(cachedOps.map((o) => o.by).filter(Boolean))];
+    $('author-filter').innerHTML = '<option value="">全部成员</option>'
+      + authors.map((a) => `<option value="${escapeHtml(a)}">${escapeHtml(a)}</option>`).join('');
+    renderOpList();
+  } catch (err) { toast(err.message || '加载操作流失败', 'error'); }
+}
+
+function renderStats(index) {
+  $('s-total').textContent = fmtNum(index.stats?.total);
+  $('s-shards').textContent = index.shards?.length ?? '—';
+  $('s-snaps').textContent = index.snapshots?.length ?? '—';
+  $('s-size').textContent = fmtBytes(index.storage?.ops_bytes);
+  const byType = index.stats?.by_type || {};
+  const maxT = Math.max(1, ...Object.values(byType));
+  $('s-types').innerHTML = Object.entries(byType).sort((a, b) => b[1] - a[1]).map(([t, n]) => {
+    const meta = OP_TYPE_META[t.replace(/\(\d+\)$/, '')] || OP_TYPE_META.batch;
+    return `<div class="bar-row"><span style="width:70px">${meta.label}${t.includes('(') ? '' : ''}</span>
+      <span class="bar"><i style="width:${(n / maxT) * 100}%;background:${meta.color}"></i></span>
+      <span class="n">${n}</span></div>`;
+  }).join('');
+  const byUser = index.stats?.by_user || {};
+  const maxU = Math.max(1, ...Object.values(byUser));
+  $('s-users').innerHTML = Object.entries(byUser).sort((a, b) => b[1] - a[1]).map(([u, n]) =>
+    `<div class="bar-row"><span style="width:70px">${escapeHtml(u)}</span>
+     <span class="bar"><i style="width:${(n / maxU) * 100}%;background:#5b8ff9"></i></span>
+     <span class="n">${n}</span></div>`).join('');
+  const shards = (index.shards || []).slice(-8);
+  $('s-shard-detail').innerHTML = '<b>最近分片</b><br>' + (shards.map((s) =>
+    `${escapeHtml(s.name)}: ${s.count} 条 · rev ${s.first_rev}~${s.last_rev}<br>`).join('') || '暂无')
+    + (index.snapshots?.length ? `<br><b>最新快照</b> rev ${index.snapshots[index.snapshots.length - 1].rev}` : '');
+  $('snapshot-note').textContent = index.snapshots?.length
+    ? `快进跳转基于 ${index.snapshots.length} 个快照(间隔 ${Math.max(1, Math.round((index.head_rev || 1) / index.snapshots.length))} rev)`
+    : '尚无快照(将从头折叠)';
+}
+
+async function initPlayer() {
+  if (!currentBoard) return;
+  $('btn-open-board').onclick = () => {
+    const mode = $('mode-badge').textContent === '思维导图' ? 'mindmap' : 'editor';
+    location.href = `/${mode}.html?board=${currentBoard}`;
+  };
+  try {
+    const meta = await Api.boards.get(currentBoard);
+    $('mode-badge').textContent = meta.board.mode === 'mindmap' ? '思维导图' : '白板';
+  } catch { /* 忽略 */ }
+  if (player) player.destroy();
+  player = new ReplayPlayer({
+    engine,
+    boardId: currentBoard,
+    timeline: $('timeline'),
+    onRev: (rev, op) => {
+      $('rev-label').textContent = `rev ${rev} / ${player.headRev}`;
+      if (op) renderOpList(rev);
+      else {
+        const cur = $('op-list .current');
+        if (cur) cur.classList.remove('current');
+      }
+    },
+    onLoaded: (p) => {
+      $('rev-label').textContent = `rev ${p.currentRev} / ${p.headRev}`;
+      loadOpsForList();
+      Api.history.index(currentBoard).then(renderStats).catch(() => {});
+    },
+  });
+  player.onEnd(() => { $('btn-play').textContent = '▶ 播放'; });
+  await player.load();
+  engine.page = 'replay';
+}
+
+/* ---------------------------------------------------------------- 播放控制 */
+function updatePlayBtn() {
+  $('btn-play').textContent = player?.playing ? '⏸ 暂停' : '▶ 播放';
+}
+$('btn-play').onclick = () => { player?.toggle(); updatePlayBtn(); };
+$('btn-start').onclick = async () => { player?.pause(); updatePlayBtn(); await seek(0); };
+$('btn-goto-head').onclick = async () => { player?.pause(); updatePlayBtn(); await seek(player?.headRev ?? 0); };
+$('btn-step-prev').onclick = async () => { updatePlayBtn(); await player?.step(-1); renderOpList(); };
+$('btn-step-next').onclick = async () => { updatePlayBtn(); await player?.step(1); renderOpList(); };
+$('btn-step-back').onclick = async () => { player?.pause(); updatePlayBtn(); await seek(Math.max(0, (player?.currentRev ?? 0) - 20)); };
+$('btn-step-fwd').onclick = async () => { player?.pause(); updatePlayBtn(); await seek(Math.min(player?.headRev ?? 0, (player?.currentRev ?? 0) + 20)); };
+$('speed').onchange = (e) => player?.setSpeed(Number(e.target.value));
+
+let seekBusy = false;
+async function seek(rev) {
+  if (!player || seekBusy) return;
+  seekBusy = true;
+  try {
+    await player.seek(rev);
+    renderOpList(rev);
+  } finally { seekBusy = false; }
+}
+
+/* 拖动进度条时同步按钮状态 */
+setInterval(() => { if (player) updatePlayBtn(); }, 400);
+
+/* ---------------------------------------------------------------- 压缩归档 */
+$('btn-compact').onclick = async () => {
+  if (!currentBoard) return;
+  const ok = await confirmDialog(
+    '物理压缩「完全位于最新快照之下且非今天」的日志分片: 合并连续移动、丢弃被覆盖的中间属性值。终态完全等价, 但被压缩区间的回放细节会减少。确认执行?',
+    { title: '压缩归档历史', danger: true });
+  if (!ok) return;
+  try {
+    const res = await Api.history.compact(currentBoard);
+    toast(`压缩完成: ${res.compacted_shards} 个分片, 减少 ${res.ops_removed} 条冗余操作`, 'success', 5000);
+    const index = await Api.history.index(currentBoard);
+    renderStats(index);
+  } catch (err) { toast(err.message || '压缩失败(需要所有者权限)', 'error'); }
+};
+
+/* ---------------------------------------------------------------- 键盘 */
+window.addEventListener('keydown', (e) => {
+  const t = e.target;
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return;
+  if (e.key === ' ') { e.preventDefault(); $('btn-play').click(); }
+  if (e.key === 'ArrowLeft') { e.preventDefault(); $('btn-step-back').click(); }
+  if (e.key === 'ArrowRight') { e.preventDefault(); $('btn-step-fwd').click(); }
+  if (e.key === 'Home') { e.preventDefault(); $('btn-start').click(); }
+  if (e.key === 'End') { e.preventDefault(); $('btn-goto-head').click(); }
+});
+
+/* ---------------------------------------------------------------- 启动 */
+await loadBoards();
+await initPlayer();
+window.addEventListener('resize', () => player?.drawTimeline());
+</script>
+</body>
+</html>

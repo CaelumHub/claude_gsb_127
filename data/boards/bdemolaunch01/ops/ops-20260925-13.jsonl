@@ -1,0 +1,5 @@
+{"op_id":"seed-demo:9","site":"seed-demo","lam":9,"ts":1790312887988,"type":"add_shape","base_rev":0,"shape":{"id":"sh_path01","kind":"path","x":120.0,"y":520.0,"w":0.0,"h":0.0,"z":1.0,"points":[[0.0,0.0],[18.0,-12.0],[40.0,-6.0],[66.0,-20.0],[95.0,-8.0],[120.0,-26.0],[150.0,-12.0],[180.0,-30.0],[210.0,-16.0],[240.0,-34.0]],"fill":"transparent","stroke":"#e8684a","strokeWidth":3.0},"rev":39,"by":"demo"}
+{"op_id":"seed-demo:10","site":"seed-demo","lam":10,"ts":1790312888188,"type":"path_extend","base_rev":0,"id":"sh_path01","points":[[66.0,-20.0],[95.0,-8.0],[120.0,-26.0],[150.0,-12.0]],"rev":40,"by":"demo"}
+{"op_id":"seed-demo:11","site":"seed-demo","lam":11,"ts":1790312888388,"type":"path_extend","base_rev":0,"id":"sh_path01","points":[[180.0,-30.0],[210.0,-16.0],[240.0,-34.0]],"rev":41,"by":"demo"}
+{"op_id":"seed-bob:14","site":"seed-bob","lam":14,"ts":1790314688388,"type":"delete_shape","base_rev":0,"id":"sh_note_b1","rev":42,"by":"bob"}
+{"op_id":"seed-bob:15","site":"seed-bob","lam":15,"ts":1790315288388,"type":"restore_shape","base_rev":0,"id":"sh_note_b1","rev":43,"by":"bob"}

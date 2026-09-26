@@ -1,0 +1,5 @@
+{"op_id":"seed-bob:1","site":"seed-bob","lam":1,"ts":1790305325248,"type":"add_shape","base_rev":0,"shape":{"id":"sh_note_b1","kind":"note","x":680.0,"y":330.0,"w":200.0,"h":130.0,"z":1.0,"text":"灰度策略:\n内部 → 5% → 20% → 100%","fill":"#d9f7be","stroke":"#00000018","strokeWidth":1.0,"fontSize":14.0},"rev":11,"by":"bob"}
+{"op_id":"seed-bob:2","site":"seed-bob","lam":2,"ts":1790306825248,"type":"add_shape","base_rev":0,"shape":{"id":"sh_note_b2","kind":"note","x":960.0,"y":330.0,"w":200.0,"h":130.0,"z":1.0,"text":"回滚预案\n监控看板链接待补","fill":"#ffd6e7","stroke":"#00000018","strokeWidth":1.0,"fontSize":14.0},"rev":12,"by":"bob"}
+{"op_id":"seed-alice:17","site":"seed-alice","lam":17,"ts":1790308687988,"type":"set_props","base_rev":0,"id":"sh_stage2","props":{"fill":"#c9f2c7"},"rev":37,"by":"alice"}
+{"op_id":"seed-alice:16","site":"seed-alice","lam":3,"ts":1790306826788,"type":"move","base_rev":0,"id":"sh_note_a1","dx":126.0,"dy":70.0,"rev":13,"by":"alice","_merged":14}
+{"op_id":"seed-bob:12","site":"seed-bob","lam":3,"ts":1790306827988,"type":"move","base_rev":0,"id":"sh_note_a1","dx":-60.0,"dy":40.0,"rev":27,"by":"bob","_merged":10}

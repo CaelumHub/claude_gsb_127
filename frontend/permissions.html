@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>用户权限 · CoBoard 协同白板</title>
+<link rel="stylesheet" href="/css/common.css">
+<style>
+  .perm-layout { display: grid; grid-template-columns: minmax(0, 2.1fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+  @media (max-width: 960px) { .perm-layout { grid-template-columns: 1fr; } }
+
+  .matrix-user { display: flex; align-items: center; gap: 10px; }
+  .matrix-user .who { min-width: 0; }
+  .matrix-user .dn { font-weight: 600; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .matrix-user .un { color: var(--text-mute); font-size: 11.5px; font-family: var(--mono); }
+  tr.row-clickable { cursor: pointer; }
+  tr.row-selected td { background: var(--accent-soft) !important; }
+
+  .role-select { min-width: 130px; }
+  .role-select:disabled { opacity: .55; cursor: not-allowed; }
+
+  .invite-box { display: flex; gap: 8px; }
+  .invite-box .input { font-family: var(--mono); font-size: 12px; color: var(--text-soft); }
+
+  .role-table td:first-child { white-space: nowrap; font-weight: 600; }
+  .role-table .cap-list { color: var(--text-soft); font-size: 12.5px; }
+
+  .preview-card .big-role { font-size: 20px; font-weight: 800; margin: 6px 0 2px; }
+  .preview-card .src { font-size: 12.5px; color: var(--text-mute); }
+  .preview-src-chain { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+  .preview-src-chain .step { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-mute); }
+  .preview-src-chain .step.hit { color: var(--text); font-weight: 600; }
+  .preview-src-chain .step .n {
+    width: 18px; height: 18px; border-radius: 50%; flex: none;
+    background: var(--bg-elevated); border: 1px solid var(--border);
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 10.5px; font-family: var(--mono);
+  }
+  .preview-src-chain .step.hit .n { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+  .admin-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  .save-bar-hint { font-size: 12px; color: var(--orange); }
+</style>
+</head>
+<body>
+<div class="wb-page">
+  <main class="wb-main">
+    <div class="wb-container">
+      <div class="wb-page-head">
+        <div>
+          <div class="wb-page-title">🔐 用户权限</div>
+          <div class="wb-page-sub">管理白板成员角色、邀请链接与全局账号 —— 所有权限均由服务端强制校验</div>
+        </div>
+        <span class="spacer"></span>
+        <select class="select" id="board-select" style="width:270px" title="选择白板"></select>
+        <button class="btn sm" id="btn-refresh">↻ 刷新</button>
+      </div>
+
+      <div id="perm-content" class="perm-layout hidden">
+        <div class="col" style="gap:14px">
+          <!-- 成员权限矩阵 -->
+          <div class="panel">
+            <div class="panel-head">
+              成员权限矩阵
+              <span class="badge accent" id="matrix-owner"></span>
+              <span class="badge" id="matrix-myrole"></span>
+              <span class="spacer"></span>
+              <span class="save-bar-hint hidden" id="dirty-hint">● 有未保存的变更</span>
+              <button class="btn primary sm" id="btn-save" disabled>保存变更</button>
+            </div>
+            <div class="panel-body" style="padding:0">
+              <div class="table-wrap" style="border:none;border-radius:0">
+                <table class="wb-table">
+                  <thead><tr>
+                    <th>用户</th><th style="width:170px">本白板角色</th>
+                    <th style="width:100px">全局角色</th><th>权限来源</th>
+                  </tr></thead>
+                  <tbody id="matrix-rows"></tbody>
+                </table>
+              </div>
+              <div class="small muted" id="matrix-note" style="padding:10px 14px"></div>
+            </div>
+          </div>
+
+          <!-- 邀请链接 -->
+          <div class="panel">
+            <div class="panel-head">🔗 邀请链接</div>
+            <div class="panel-body">
+              <div class="invite-box">
+                <input class="input" id="invite-link" readonly>
+                <button class="btn" id="btn-copy">复制链接</button>
+                <a class="btn ghost" id="btn-open-board" href="#" target="_blank">打开白板 ↗</a>
+              </div>
+              <div class="row mt8 wrap">
+                <label class="small soft nowrap">链接访客默认角色</label>
+                <select class="select" id="public-role" style="width:170px">
+                  <option value="">不开放(仅授权成员)</option>
+                  <option value="viewer">只读 viewer</option>
+                  <option value="commenter">可评论 commenter</option>
+                  <option value="editor">可编辑 editor</option>
+                </select>
+                <span class="small muted">已登录用户通过链接获得该角色; 变更后点「保存变更」生效</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 角色说明 -->
+          <div class="panel">
+            <div class="panel-head">📖 角色能力对照</div>
+            <div class="panel-body" style="padding:0">
+              <table class="wb-table role-table">
+                <tbody>
+                  <tr><td><span class="badge">只读 viewer</span></td>
+                      <td class="cap-list">查看白板 · 历史回放 · 导出 · 查看聊天</td></tr>
+                  <tr><td><span class="badge yellow">可评论 commenter</span></td>
+                      <td class="cap-list">viewer 全部能力 + 协作聊天发言</td></tr>
+                  <tr><td><span class="badge green">可编辑 editor</span></td>
+                      <td class="cap-list">commenter 全部能力 + 绘制/编辑图形 · 撤销重做 · 移动/删除元素 · 保存缩略图</td></tr>
+                  <tr><td><span class="badge accent">所有者 owner</span></td>
+                      <td class="cap-list">editor 全部能力 + 成员与权限管理 · 重命名/删除白板 · 压缩历史分片(创建者与系统管理员自动拥有)</td></tr>
+                </tbody>
+              </table>
+              <div class="small muted" style="padding:10px 14px">
+                优先级: 系统管理员 &gt; 白板所有者 &gt; 成员授权(acl) &gt; 邀请链接默认角色。WebSocket 操作接入与全部 REST
+                接口在服务端二次校验, 前端隐藏仅是展示层。
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="col" style="gap:14px">
+          <!-- 有效性预览 -->
+          <div class="panel preview-card">
+            <div class="panel-head">🔍 有效性预览</div>
+            <div class="panel-body">
+              <div class="field" style="margin-bottom:8px">
+                <select class="select" id="preview-user"></select>
+              </div>
+              <div id="preview-body"></div>
+            </div>
+          </div>
+
+          <!-- 在线情况 -->
+          <div class="panel">
+            <div class="panel-head">👥 协作提示</div>
+            <div class="panel-body small soft" style="line-height:1.8">
+              · 修改成员角色后, 对方页面在下一次操作/重连时生效<br>
+              · 「移除」= 从授权表删除, 若邀请链接开放则其仍可获得链接角色<br>
+              · 降级为 viewer 的在线用户会被拒绝后续编辑操作(read_only)<br>
+              · 实时在线列表见 <a href="/chat.html" id="chat-link">协作聊天</a> 页
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 管理员: 全局用户管理 -->
+      <div class="panel mt16 hidden" id="admin-panel">
+        <div class="panel-head">
+          🛡 全局用户管理 <span class="badge purple">管理员</span>
+          <span class="spacer"></span>
+          <button class="btn sm" id="btn-reload-users">↻ 刷新</button>
+        </div>
+        <div class="panel-body" style="padding:0">
+          <div class="table-wrap" style="border:none;border-radius:0">
+            <table class="wb-table">
+              <thead><tr>
+                <th>用户</th><th style="width:90px">全局角色</th><th style="width:80px">状态</th>
+                <th style="width:150px">注册时间</th><th style="width:130px">最近登录</th><th>操作</th>
+              </tr></thead>
+              <tbody id="admin-rows"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div id="empty-state"></div>
+    </div>
+  </main>
+</div>
+
+<script type="module">
+import { Api } from './js/api.js';
+import {
+  avatarHtml, confirmDialog, escapeHtml, fmtTime, initPage, modal,
+  promptDialog, qs, toast,
+} from './js/ui.js';
+
+const me = await initPage('permissions', { gate: true, title: '用户权限' });
+if (me) main(me);
+
+const ROLE_LABEL = { owner: '所有者', editor: '可编辑', commenter: '可评论', viewer: '只读' };
+const LS_BOARD = 'wb_perm_board';
+
+let boards = [];
+let currentBoard = null;
+let perm = null;                 // 服务端返回的权限快照
+let pendingAcl = {};             // 编辑中的 acl
+let pendingPublic = '';          // 编辑中的 public_role
+let previewUsername = null;
+
+async function main(me) {
+  document.getElementById('btn-refresh').onclick = () => loadPermissions(true);
+  document.getElementById('btn-save').onclick = savePermissions;
+  document.getElementById('btn-copy').onclick = copyInvite;
+  document.getElementById('public-role').onchange = (e) => {
+    pendingPublic = e.target.value;
+    updateSaveState();
+  };
+  document.getElementById('preview-user').onchange = (e) => {
+    previewUsername = e.target.value;
+    renderPreview();
+  };
+  document.getElementById('btn-reload-users').onclick = loadAdminUsers;
+  document.getElementById('board-select').onchange = (e) => selectBoard(e.target.value);
+  await loadBoards(me);
+  if (me.role === 'admin') {
+    document.getElementById('admin-panel').classList.remove('hidden');
+    loadAdminUsers();
+  }
+}
+
+/* ------------------------------------------------------------ 白板选择 */
+async function loadBoards(me) {
+  try {
+    const data = await Api.boards.list({ sort: 'updated' });
+    boards = data.boards || [];
+  } catch (err) {
+    toast(err.message || '加载白板列表失败', 'error');
+    return;
+  }
+  const select = document.getElementById('board-select');
+  if (!boards.length) {
+    select.innerHTML = '<option>暂无白板</option>';
+    document.getElementById('empty-state').innerHTML = `
+      <div class="empty-state">
+        <div class="icon">🗒</div>
+        <div class="title">还没有可管理的白板</div>
+        <div>先在列表页创建一个白板, 再回来配置成员权限</div>
+        <a class="btn primary mt8" href="/index.html">去创建白板</a>
+      </div>`;
+    return;
+  }
+  select.innerHTML = boards.map((b) => `
+    <option value="${escapeHtml(b.id)}">${b.mode === 'mindmap' ? '🧠' : '🎨'} ${escapeHtml(b.name)}（${ROLE_LABEL[b.your_role] || b.your_role}）</option>`).join('');
+  const wanted = qs('board') || localStorage.getItem(LS_BOARD) || boards[0].id;
+  const initial = boards.some((b) => b.id === wanted) ? wanted : boards[0].id;
+  select.value = initial;
+  await selectBoard(initial);
+}
+
+async function selectBoard(id) {
+  currentBoard = boards.find((b) => b.id === id);
+  if (!currentBoard) return;
+  try { localStorage.setItem(LS_BOARD, id); } catch { /* 隐私模式 */ }
+  document.getElementById('perm-content').classList.remove('hidden');
+  await loadPermissions();
+}
+
+/* ------------------------------------------------------------ 权限加载/渲染 */
+async function loadPermissions(viaRefresh = false) {
+  if (!currentBoard) return;
+  try {
+    perm = await Api.boards.permissions(currentBoard.id);
+  } catch (err) {
+    toast(err.message || '加载权限失败', 'error');
+    return;
+  }
+  pendingAcl = { ...(perm.acl || {}) };
+  pendingPublic = perm.public_role || '';
+  if (!previewUsername || !perm.users.some((u) => u.username === previewUsername)) {
+    previewUsername = perm.users[0]?.username || null;
+  }
+  renderMatrix();
+  renderInvite();
+  renderPreview();
+  updateSaveState();
+  if (viaRefresh) toast('权限已刷新', 'success');
+}
+
+function sourceOf(username) {
+  if (!perm) return '—';
+  const u = perm.users.find((x) => x.username === username);
+  if (u?.role === 'admin') return '系统管理员(覆盖为 owner)';
+  if (perm.owner === username) return '白板所有者';
+  if ((perm.acl || {})[username]) return `成员授权 · ${ROLE_LABEL[perm.acl[username]]}`;
+  if (perm.public_role) return `邀请链接 · ${ROLE_LABEL[perm.public_role]}`;
+  return '未授权(无法访问)';
+}
+
+function renderMatrix() {
+  const tbody = document.getElementById('matrix-rows');
+  const canManage = !!perm.can_manage;
+  document.getElementById('matrix-owner').textContent = `所有者 @${perm.owner}`;
+  document.getElementById('matrix-myrole').textContent = `我的角色: ${ROLE_LABEL[perm.your_role] || perm.your_role}`;
+  document.getElementById('matrix-note').textContent = canManage
+    ? '修改后点击右上角「保存变更」提交; 所有者不可被降级或移除。'
+    : '⚠ 仅白板所有者或系统管理员可修改成员权限, 当前为只读视图。';
+
+  tbody.innerHTML = perm.users.map((u) => {
+    const isOwner = u.username === perm.owner;
+    const aclRole = pendingAcl[u.username] || '';
+    const selectHtml = isOwner
+      ? `<span class="badge accent">所有者</span>`
+      : `<select class="select role-select sm" data-user="${escapeHtml(u.username)}" ${canManage ? '' : 'disabled'}>
+          <option value="" ${aclRole === '' ? 'selected' : ''}>未授权 / 移除</option>
+          <option value="editor" ${aclRole === 'editor' ? 'selected' : ''}>可编辑 editor</option>
+          <option value="commenter" ${aclRole === 'commenter' ? 'selected' : ''}>可评论 commenter</option>
+          <option value="viewer" ${aclRole === 'viewer' ? 'selected' : ''}>只读 viewer</option>
+        </select>`;
+    return `
+    <tr class="row-clickable ${previewUsername === u.username ? 'row-selected' : ''}" data-user="${escapeHtml(u.username)}">
+      <td>
+        <div class="matrix-user">
+          ${avatarHtml({ display_name: u.display_name, username: u.username, color: u.color })}
+          <div class="who">
+            <div class="dn">${escapeHtml(u.display_name || u.username)}</div>
+            <div class="un">@${escapeHtml(u.username)}</div>
+          </div>
+        </div>
+      </td>
+      <td>${selectHtml}</td>
+      <td>${u.role === 'admin' ? '<span class="badge purple">管理员</span>' : '<span class="badge">用户</span>'}</td>
+      <td class="small muted">${escapeHtml(sourceOf(u.username))}</td>
+    </tr>`;
+  }).join('');
+
+  tbody.querySelectorAll('select[data-user]').forEach((sel) => {
+    sel.onclick = (e) => e.stopPropagation();
+    sel.onchange = (e) => {
+      const username = sel.dataset.user;
+      if (e.target.value) pendingAcl[username] = e.target.value;
+      else delete pendingAcl[username];
+      updateSaveState();
+      // 刷新该行的「来源」列与预览
+      loadPermissionsSilently();
+    };
+  });
+  tbody.querySelectorAll('tr[data-user]').forEach((tr) => {
+    tr.onclick = () => {
+      previewUsername = tr.dataset.user;
+      document.getElementById('preview-user').value = previewUsername;
+      renderPreview();
+      tbody.querySelectorAll('tr').forEach((x) => x.classList.toggle('row-selected', x === tr));
+    };
+  });
+}
+
+/** 本地重渲染来源列(不发请求): pending 变化时即时反馈 */
+function loadPermissionsSilently() {
+  const merged = { ...perm, acl: pendingAcl, public_role: pendingPublic };
+  const savedPerm = perm;
+  perm = merged;
+  const rows = document.getElementById('matrix-rows');
+  rows.querySelectorAll('tr[data-user]').forEach((tr) => {
+    const cell = tr.lastElementChild;
+    if (cell) cell.textContent = sourceOf(tr.dataset.user);
+  });
+  perm = savedPerm;
+  renderPreview();
+}
+
+function normalizeAcl(acl) {
+  return Object.keys(acl).sort().map((k) => `${k}:${acl[k]}`).join(',');
+}
+
+function updateSaveState() {
+  const dirty = normalizeAcl(pendingAcl) !== normalizeAcl(perm?.acl || {})
+    || pendingPublic !== (perm?.public_role || '');
+  document.getElementById('btn-save').disabled = !dirty || !perm?.can_manage;
+  document.getElementById('dirty-hint').classList.toggle('hidden', !dirty);
+}
+
+async function savePermissions() {
+  if (!perm?.can_manage) return;
+  try {
+    await Api.boards.putPermissions(currentBoard.id, pendingAcl, pendingPublic || '');
+    toast('权限已保存', 'success');
+    await loadPermissions();
+  } catch (err) {
+    toast(err.message || '保存失败', 'error');
+  }
+}
+
+/* ------------------------------------------------------------ 邀请链接 */
+function inviteUrl() {
+  return `${location.origin}/editor.html?board=${encodeURIComponent(currentBoard.id)}`;
+}
+
+function renderInvite() {
+  document.getElementById('invite-link').value = inviteUrl();
+  document.getElementById('btn-open-board').href = inviteUrl();
+  const sel = document.getElementById('public-role');
+  sel.value = pendingPublic;
+  sel.disabled = !perm.can_manage;
+  const chatLink = document.getElementById('chat-link');
+  chatLink.href = `/chat.html?board=${encodeURIComponent(currentBoard.id)}`;
+}
+
+async function copyInvite() {
+  const text = inviteUrl();
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('邀请链接已复制', 'success');
+  } catch {
+    // 降级: 临时 textarea + execCommand
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      document.execCommand('copy');
+      toast('邀请链接已复制', 'success');
+    } catch {
+      toast('复制失败, 请手动复制', 'error');
+    }
+    ta.remove();
+  }
+}
+
+/* ------------------------------------------------------------ 有效性预览 */
+function effectiveRole(username) {
+  // 与 backend/auth.py board_role 同逻辑(以 pending 值预演保存后的效果)
+  const u = perm.users.find((x) => x.username === username);
+  const acl = pendingAcl;
+  if (u?.role === 'admin') return { role: 'owner', source: '系统管理员 → 覆盖为 owner', step: 1 };
+  if (perm.owner === username) return { role: 'owner', source: '白板所有者(meta.owner)', step: 2 };
+  if (acl[username]) return { role: acl[username], source: `成员授权表 acl → ${ROLE_LABEL[acl[username]]}`, step: 3 };
+  if (pendingPublic) return { role: pendingPublic, source: `邀请链接默认角色 → ${ROLE_LABEL[pendingPublic]}`, step: 4 };
+  return { role: null, source: '无任何授权 → 拒绝访问', step: 5 };
+}
+
+function renderPreview() {
+  const select = document.getElementById('preview-user');
+  const options = perm.users.map((u) =>
+    `<option value="${escapeHtml(u.username)}" ${u.username === previewUsername ? 'selected' : ''}>${escapeHtml(u.display_name || u.username)}（@${escapeHtml(u.username)}）</option>`).join('');
+  if (select.innerHTML !== options) select.innerHTML = options;
+  const body = document.getElementById('preview-body');
+  if (!previewUsername) { body.innerHTML = '<div class="small muted">暂无用户</div>'; return; }
+  const eff = effectiveRole(previewUsername);
+  const steps = [
+    [1, '系统管理员?'], [2, '是所有者?'], [3, '在授权表(acl)?'], [4, '邀请链接开放?'], [5, '拒绝访问'],
+  ];
+  const badgeCls = { owner: 'accent', editor: 'green', commenter: 'yellow', viewer: '' }[eff.role] ?? 'red';
+  body.innerHTML = `
+    <div class="big-role">${eff.role ? ROLE_LABEL[eff.role] : '⛔ 无权限'}</div>
+    <div class="src">${escapeHtml(eff.source)}</div>
+    <div class="preview-src-chain">
+      ${steps.map(([n, label]) => `
+        <div class="step ${eff.step === n ? 'hit' : ''}">
+          <span class="n">${n}</span>${label}${eff.step === n ? ' ← 命中' : ''}
+        </div>`).join('')}
+    </div>
+    <div class="divider"></div>
+    <div class="small muted">预览按当前未保存的编辑值实时推算, 与服务端 auth.board_role 判定链一致。</div>`;
+  void badgeCls;
+}
+
+/* ------------------------------------------------------------ 管理员: 全局用户 */
+async function loadAdminUsers() {
+  let users = [];
+  try {
+    users = (await Api.users.list()).users || [];
+  } catch (err) {
+    toast(err.message || '加载用户失败', 'error');
+    return;
+  }
+  const tbody = document.getElementById('admin-rows');
+  tbody.innerHTML = users.map((u) => {
+    const isSelf = u.username === me.username;
+    const actions = [];
+    actions.push(u.role === 'admin'
+      ? `<button class="btn sm" data-act="demote" data-u="${escapeHtml(u.username)}" ${isSelf ? 'disabled title="不能取消自己的管理员角色"' : ''}>取消管理员</button>`
+      : `<button class="btn sm" data-act="promote" data-u="${escapeHtml(u.username)}">设为管理员</button>`);
+    actions.push(u.disabled
+      ? `<button class="btn sm" data-act="enable" data-u="${escapeHtml(u.username)}">启用</button>`
+      : `<button class="btn sm" data-act="disable" data-u="${escapeHtml(u.username)}" ${isSelf ? 'disabled title="不能停用自己"' : ''}>停用</button>`);
+    actions.push(`<button class="btn sm" data-act="nick" data-u="${escapeHtml(u.username)}">改昵称</button>`);
+    actions.push(`<button class="btn sm" data-act="pwd" data-u="${escapeHtml(u.username)}" ${isSelf ? '' : 'disabled title="接口限制: 仅本人可修改密码"'}>重置密码</button>`);
+    return `
+    <tr>
+      <td><div class="matrix-user">${avatarHtml(u)}
+        <div class="who"><div class="dn">${escapeHtml(u.display_name || u.username)}${isSelf ? ' <span class="badge accent">我</span>' : ''}</div>
+        <div class="un">@${escapeHtml(u.username)}</div></div></div></td>
+      <td>${u.role === 'admin' ? '<span class="badge purple">管理员</span>' : '<span class="badge">用户</span>'}</td>
+      <td>${u.disabled ? '<span class="badge red">已停用</span>' : '<span class="badge green">正常</span>'}</td>
+      <td class="small muted">${fmtTime(u.created_at)}</td>
+      <td class="small muted">${u.last_login ? fmtTime(u.last_login) : '从未登录'}</td>
+      <td><div class="admin-actions">${actions.join('')}</div></td>
+    </tr>`;
+  }).join('');
+
+  tbody.querySelectorAll('button[data-act]').forEach((btn) => {
+    if (btn.disabled) return;
+    btn.onclick = () => adminAction(btn.dataset.act, btn.dataset.u, users);
+  });
+}
+
+async function adminAction(act, username, users) {
+  const u = users.find((x) => x.username === username);
+  try {
+    if (act === 'promote') {
+      if (await confirmDialog(`将 @${username} 设为系统管理员? 管理员对所有白板拥有 owner 权限。`)) {
+        await Api.users.patch(username, { role: 'admin' });
+        toast('已设为管理员', 'success');
+      }
+    } else if (act === 'demote') {
+      if (await confirmDialog(`取消 @${username} 的管理员角色?`, { danger: true })) {
+        await Api.users.patch(username, { role: 'user' });
+        toast('已取消管理员', 'success');
+      }
+    } else if (act === 'disable') {
+      if (await confirmDialog(`停用 @${username}? 停用后无法登录, 现有会话立即失效。`, { danger: true })) {
+        await Api.users.patch(username, { disabled: true });
+        toast('已停用', 'success');
+      }
+    } else if (act === 'enable') {
+      await Api.users.patch(username, { disabled: false });
+      toast('已启用', 'success');
+    } else if (act === 'nick') {
+      const nick = await promptDialog('新昵称', { title: `修改 @${username} 的昵称`, value: u?.display_name || '', placeholder: '2-40 字符' });
+      if (nick) {
+        await Api.users.patch(username, { display_name: nick });
+        toast('昵称已更新', 'success');
+      }
+    } else if (act === 'pwd') {
+      const pwd = await promptDialog('新密码(至少 4 位)', { title: `重置 @${username} 的密码`, placeholder: '••••' });
+      if (pwd) {
+        if (pwd.length < 4) { toast('密码至少 4 位', 'warn'); return; }
+        await Api.users.patch(username, { password: pwd });
+        toast('密码已重置', 'success');
+      }
+    }
+    loadAdminUsers();
+    if (perm) loadPermissions();
+  } catch (err) {
+    toast(err.message || '操作失败', 'error');
+  }
+}
+</script>
+</body>
+</html>

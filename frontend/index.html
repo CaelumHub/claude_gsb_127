@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>白板列表 · CoBoard 协同白板</title>
+<link rel="stylesheet" href="/css/common.css">
+<style>
+  .hero {
+    display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+    padding: 26px 28px; margin-bottom: 20px; border-radius: 14px;
+    background:
+      radial-gradient(600px 200px at 12% -30%, var(--accent-soft), transparent),
+      radial-gradient(500px 200px at 90% 0%, #9270ca22, transparent),
+      var(--bg-panel);
+    border: 1px solid var(--border);
+  }
+  .hero h1 { font-size: 24px; font-weight: 800; letter-spacing: .5px; }
+  .hero p { color: var(--text-soft); font-size: 13px; margin-top: 4px; max-width: 560px; }
+  .hero-stats { display: flex; gap: 22px; margin-left: auto; text-align: center; }
+  .hero-stats .num { font-size: 22px; font-weight: 800; color: var(--accent-text); }
+  .hero-stats .lbl { font-size: 11.5px; color: var(--text-mute); }
+
+  .section-head { display: flex; align-items: center; gap: 10px; margin: 22px 0 12px; }
+  .section-head h2 { font-size: 16px; font-weight: 700; }
+  .section-head .spacer { flex: 1; }
+
+  .board-card { overflow: hidden; padding: 0; }
+  .board-card .thumb-box { aspect-ratio: 16/9; border-radius: 0; border-bottom: 1px solid var(--border-soft); }
+  .board-card .info { padding: 12px 14px; }
+  .board-card .name { font-weight: 700; font-size: 14.5px; display: flex; align-items: center; gap: 6px; }
+  .board-card .sub { color: var(--text-mute); font-size: 12px; margin-top: 3px; display: flex; gap: 8px; flex-wrap: wrap; }
+
+  .quick-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+  .quick-card {
+    display: flex; flex-direction: column; gap: 4px; align-items: flex-start;
+    padding: 14px; border-radius: var(--radius);
+    background: var(--bg-panel); border: 1px solid var(--border);
+    color: var(--text); cursor: pointer; transition: all .15s;
+  }
+  .quick-card:hover { border-color: var(--accent); transform: translateY(-2px); text-decoration: none; }
+  .quick-card .ico { font-size: 20px; }
+  .quick-card .t { font-weight: 600; font-size: 13.5px; }
+  .quick-card .d { font-size: 11.5px; color: var(--text-mute); }
+
+  .tpl-mini-row { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 6px; }
+  .tpl-mini {
+    flex: none; width: 200px; cursor: pointer; border-radius: var(--radius);
+    border: 1px solid var(--border); background: var(--bg-panel); overflow: hidden;
+    transition: all .15s;
+  }
+  .tpl-mini:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .tpl-mini canvas { width: 100%; height: 110px; display: block; background: #fbfbf9; }
+  .tpl-mini .cap { padding: 8px 10px; }
+  .tpl-mini .cap .t { font-size: 13px; font-weight: 600; }
+  .tpl-mini .cap .d { font-size: 11px; color: var(--text-mute); }
+</style>
+</head>
+<body>
+<div class="wb-page">
+  <main class="wb-main">
+    <div class="wb-container">
+      <div class="hero">
+        <div>
+          <h1>协同白板 · CoBoard</h1>
+          <p>多人实时协作的白板与思维导图: CRDT 冲突合成、操作级历史回放、断线自动补发。选择一个白板继续, 或从模板新建。</p>
+        </div>
+        <div class="hero-stats">
+          <div><div class="num" id="stat-boards">—</div><div class="lbl">我的白板</div></div>
+          <div><div class="num" id="stat-online">—</div><div class="lbl">在线协作</div></div>
+          <div><div class="num" id="stat-ops">—</div><div class="lbl">累计操作</div></div>
+        </div>
+        <button class="btn primary lg" id="btn-new">＋ 新建白板</button>
+      </div>
+
+      <div class="section-head">
+        <h2>📌 最近编辑</h2>
+        <span class="spacer"></span>
+        <input class="input" id="search" placeholder="搜索白板…" style="width:200px">
+        <a class="btn sm" href="/files.html">全部文件 →</a>
+      </div>
+      <div class="grid cols-4" id="board-grid"></div>
+      <div id="board-empty"></div>
+
+      <div class="section-head"><h2>⚡ 快速入口</h2></div>
+      <div class="quick-grid" id="quick-grid"></div>
+
+      <div class="section-head">
+        <h2>🧩 从模板开始</h2>
+        <span class="spacer"></span>
+        <a class="btn sm" href="/templates.html">模板库 →</a>
+      </div>
+      <div class="tpl-mini-row" id="tpl-row"></div>
+    </div>
+  </main>
+</div>
+
+<script type="module">
+import { Api } from './js/api.js';
+import { BoardEngine } from './js/engine.js';
+import {
+  avatarHtml, confirmDialog, debounce, escapeHtml, fmtRel, getMe, initPage,
+  loginDialog, modal, promptDialog, toast,
+} from './js/ui.js';
+
+const me = await initPage('index', { title: '白板列表' });
+
+const QUICK = [
+  { href: '/editor.html', ico: '🎨', t: '白板编辑', d: '自由绘制 · 图形 · 便签 · 连线' },
+  { href: '/mindmap.html', ico: '🧠', t: '思维导图', d: '自动布局 · 节点折叠' },
+  { href: '/files.html', ico: '🗂', t: '文件管理', d: '多白板切换与管理' },
+  { href: '/chat.html', ico: '💬', t: '协作聊天', d: '白板房间实时沟通' },
+  { href: '/replay.html', ico: '⏱', t: '历史回放', d: '操作时间轴逐帧重演' },
+  { href: '/permissions.html', ico: '🔐', t: '用户权限', d: '成员角色与访问控制' },
+  { href: '/templates.html', ico: '🧩', t: '模板库', d: '流程 / 规划 / 分析模板' },
+  { href: '/export.html', ico: '📤', t: '导出', d: 'PNG / SVG / JSON' },
+  { href: '/settings.html', ico: '⚙️', t: '系统设置', d: '偏好与服务端参数' },
+];
+
+const quickGrid = document.getElementById('quick-grid');
+quickGrid.innerHTML = QUICK.map((q) => `
+  <a class="quick-card" href="${q.href}">
+    <span class="ico">${q.ico}</span><span class="t">${q.t}</span><span class="d">${q.d}</span>
+  </a>`).join('');
+
+let allBoards = [];
+let allTemplates = [];
+
+function boardEditorHref(board) {
+  const page = board.mode === 'mindmap' ? 'mindmap' : 'editor';
+  return `/${page}.html?board=${encodeURIComponent(board.id)}`;
+}
+
+function boardCard(board) {
+  const roleBadge = { owner: '<span class="badge accent">所有者</span>', editor: '<span class="badge green">可编辑</span>',
+    commenter: '<span class="badge yellow">可评论</span>', viewer: '<span class="badge">只读</span>' }[board.your_role] || '';
+  const thumb = board.thumbnail
+    ? `<img src="${board.thumbnail}" alt="">`
+    : `<span class="placeholder">${board.mode === 'mindmap' ? '🧠' : '🎨'}</span>`;
+  return `
+  <div class="card hoverable board-card" data-id="${board.id}">
+    <div class="thumb-box">${thumb}</div>
+    <div class="info">
+      <div class="name">${board.mode === 'mindmap' ? '🧠' : '🎨'} ${escapeHtml(board.name)} ${roleBadge}</div>
+      <div class="sub">
+        <span>${fmtRel(board.updated_at)}</span>
+        <span>·</span><span>${board.stats?.shapes ?? '—'} 图形</span>
+        <span>·</span><span>@${escapeHtml(board.owner || '?')}</span>
+      </div>
+      <div style="margin-top:6px">${(board.tags || []).map((t) => `<span class="tag">#${escapeHtml(t)}</span>`).join('')}</div>
+    </div>
+  </div>`;
+}
+
+function renderBoards(filter = '') {
+  const grid = document.getElementById('board-grid');
+  const empty = document.getElementById('board-empty');
+  const boards = allBoards.filter((b) => !filter || (b.name || '').toLowerCase().includes(filter.toLowerCase())).slice(0, 8);
+  grid.innerHTML = boards.map(boardCard).join('');
+  empty.innerHTML = boards.length ? '' : `
+    <div class="empty-state">
+      <div class="icon">🗒</div>
+      <div class="title">${me ? '还没有白板' : '登录后查看白板'}</div>
+      <div>${me ? '点击右上角「新建白板」, 或从下方模板快速开始' : ''}</div>
+      ${me ? '' : '<button class="btn primary mt8" id="empty-login">登录 / 注册</button>'}
+    </div>`;
+  document.getElementById('empty-login')?.addEventListener('click', async () => {
+    if (await loginDialog()) location.reload();
+  });
+  grid.querySelectorAll('.board-card').forEach((el) => {
+    const board = allBoards.find((b) => b.id === el.dataset.id);
+    el.onclick = () => { location.href = boardEditorHref(board); };
+    el.oncontextmenu = async (e) => {
+      e.preventDefault();
+      if (board.your_role !== 'owner' && me?.role !== 'admin') return;
+      if (await confirmDialog(`删除白板「${board.name}」? 该操作不可恢复。`, { danger: true })) {
+        try { await Api.boards.remove(board.id); toast('已删除', 'success'); load(); }
+        catch (err) { toast(err.message, 'error'); }
+      }
+    };
+  });
+}
+
+async function load() {
+  if (!me) {
+    document.getElementById('stat-boards').textContent = '🔒';
+    renderBoards();
+    return;
+  }
+  try {
+    const data = await Api.boards.list({ sort: 'updated' });
+    allBoards = data.boards || [];
+    renderBoards(document.getElementById('search').value);
+    document.getElementById('stat-boards').textContent = allBoards.length;
+    let totalOps = 0; let onlineNote = 0;
+    try {
+      const sys = await Api.system.stats();
+      totalOps = sys.total_ops || 0;
+      onlineNote = sys.online_clients || 0;
+    } catch { /* 非管理员拿不到系统统计, 忽略 */ }
+    document.getElementById('stat-ops').textContent = totalOps > 9999 ? `${(totalOps / 10000).toFixed(1)}万` : (totalOps || '—');
+    document.getElementById('stat-online').textContent = onlineNote || '—';
+  } catch (err) {
+    toast(err.message || '加载白板失败', 'error');
+  }
+}
+
+async function loadTemplates() {
+  if (!me) return;
+  try {
+    const data = await Api.templates.list();
+    allTemplates = (data.templates || []).filter((t) => t.id !== 'blank-board' && t.id !== 'blank-mindmap');
+    const row = document.getElementById('tpl-row');
+    row.innerHTML = allTemplates.slice(0, 8).map((t) => `
+      <div class="tpl-mini" data-id="${t.id}">
+        <canvas data-tpl="${t.id}"></canvas>
+        <div class="cap"><div class="t">${escapeHtml(t.name)}</div><div class="d">${escapeHtml(t.category)} · ${escapeHtml(t.description || '')}</div></div>
+      </div>`).join('');
+    // 渲染模板缩略预览
+    for (const t of allTemplates.slice(0, 8)) {
+      const canvas = row.querySelector(`canvas[data-tpl="${t.id}"]`);
+      if (!canvas) continue;
+      try {
+        const { shapes } = await Api.templates.shapes(t.id);
+        BoardEngine.renderStatic(canvas, shapes, { maxW: 200, maxH: 110, padding: 14 });
+      } catch { /* 预览失败不影响列表 */ }
+    }
+    row.querySelectorAll('.tpl-mini').forEach((el) => {
+      el.onclick = () => createBoardDialog(el.dataset.id);
+    });
+  } catch { /* 忽略 */ }
+}
+
+async function createBoardDialog(templateId = null) {
+  if (!getMe() && !(await loginDialog())) return;
+  let tpl = null;
+  if (templateId) tpl = allTemplates.find((t) => t.id === templateId) || { id: templateId, name: templateId };
+  const m = modal({
+    title: tpl ? `从模板新建 · ${tpl.name}` : '新建白板',
+    body: `
+      <div class="field"><label>白板名称</label>
+        <input class="input" data-name value="${escapeHtml(tpl ? tpl.name : '未命名白板')}" maxlength="80"></div>
+      <div class="field"><label>模式</label>
+        <select class="select" data-mode ${tpl ? 'disabled' : ''}>
+          <option value="board" ${!tpl || tpl.mode === 'board' ? 'selected' : ''}>🎨 自由白板(绘制/图形/便签/连线)</option>
+          <option value="mindmap" ${tpl?.mode === 'mindmap' ? 'selected' : ''}>🧠 思维导图(自动布局/折叠)</option>
+        </select></div>
+      <div class="field"><label>标签(逗号分隔, 可选)</label>
+        <input class="input" data-tags placeholder="产品, Q3"></div>`,
+    footer: `<button class="btn" data-cancel>取消</button><button class="btn primary" data-ok>创建并打开</button>`,
+    onMount(el, close) {
+      el.querySelector('[data-cancel]').onclick = close;
+      const ok = async () => {
+        const name = el.querySelector('[data-name]').value.trim() || '未命名白板';
+        const mode = el.querySelector('[data-mode]').value;
+        const tags = el.querySelector('[data-tags]').value.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
+        try {
+          const data = await Api.boards.create({ name, mode, tags, template_id: tpl?.id || null });
+          close();
+          location.href = boardEditorHref(data.board);
+        } catch (err) { toast(err.message || '创建失败', 'error'); }
+      };
+      el.querySelector('[data-ok]').onclick = ok;
+      el.querySelector('[data-name]').addEventListener('keydown', (e) => { if (e.key === 'Enter') ok(); });
+      setTimeout(() => el.querySelector('[data-name]').focus(), 40);
+    },
+  });
+  return m;
+}
+
+document.getElementById('btn-new').onclick = () => createBoardDialog();
+document.getElementById('search').addEventListener('input',
+  debounce((e) => renderBoards(e.target.value), 200));
+
+load();
+loadTemplates();
+setInterval(load, 30_000);   // 轻量轮询保持列表新鲜
+</script>
+</body>
+</html>

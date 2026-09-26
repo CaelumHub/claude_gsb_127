@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>思维导图 · CoBoard 协同白板</title>
+<link rel="stylesheet" href="/css/common.css">
+<style>
+  body { overflow: hidden; }
+  .mm-topline {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    height: 48px; padding: 0 12px; flex: none;
+    background: var(--bg-panel); border-bottom: 1px solid var(--border);
+  }
+  .mm-board-name { font-weight: 700; font-size: 14.5px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mm-body { flex: 1; display: flex; min-height: 0; }
+
+  .mm-sidebar {
+    width: 250px; flex: none; display: flex; flex-direction: column;
+    background: var(--bg-panel); border-right: 1px solid var(--border);
+    transition: margin-left .2s;
+  }
+  .mm-sidebar.collapsed { margin-left: -250px; }
+  .mm-sidebar-head {
+    display: flex; align-items: center; gap: 8px; padding: 10px 12px;
+    border-bottom: 1px solid var(--border-soft); font-weight: 600; font-size: 13px;
+  }
+  .mm-outline { flex: 1; overflow: auto; padding: 6px 4px; }
+  .mm-outline-row {
+    display: flex; align-items: center; gap: 6px; padding: 5px 8px;
+    border-radius: 6px; cursor: pointer; font-size: 13px; color: var(--text-soft);
+    white-space: nowrap; overflow: hidden;
+  }
+  .mm-outline-row:hover { background: var(--bg-hover); color: var(--text); }
+  .mm-outline-row.selected { background: var(--accent-soft); color: var(--accent-text); font-weight: 600; }
+  .mm-chev { width: 14px; flex: none; text-align: center; color: var(--text-mute); font-size: 11px; cursor: pointer; }
+  .mm-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .mm-label { overflow: hidden; text-overflow: ellipsis; }
+
+  .mm-canvas-host { flex: 1; position: relative; min-width: 0; background: #fbfbf9; }
+  .mm-minimap {
+    position: absolute; right: 12px; bottom: 12px; z-index: 20;
+    width: 190px; height: 128px; border-radius: 8px;
+    border: 1px solid var(--border); box-shadow: var(--shadow);
+    background: var(--bg-elevated); overflow: hidden;
+  }
+  .mm-zoomctl {
+    position: absolute; right: 12px; top: 12px; z-index: 20;
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .mm-zoomctl .btn { width: 34px; height: 34px; padding: 0; box-shadow: var(--shadow); }
+
+  .mm-hint {
+    position: absolute; left: 12px; bottom: 12px; z-index: 20;
+    background: var(--bg-panel); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 12px; font-size: 11.5px; color: var(--text-mute);
+    line-height: 1.8; box-shadow: var(--shadow); max-width: 300px;
+  }
+  .mm-status {
+    height: 26px; flex: none; display: flex; align-items: center; gap: 14px;
+    padding: 0 12px; font-size: 11.5px; color: var(--text-mute);
+    background: var(--bg-panel); border-top: 1px solid var(--border);
+    font-family: var(--mono); white-space: nowrap;
+  }
+  .ed-users { display: flex; align-items: center; }
+  .ed-users .wb-avatar { margin-left: -7px; border: 2px solid var(--bg-panel); }
+  .ed-users .wb-avatar:first-child { margin-left: 0; }
+</style>
+</head>
+<body>
+<div class="wb-page">
+  <div class="mm-topline">
+    <button class="btn sm ghost" id="btn-sidebar" title="折叠/展开大纲">☰</button>
+    <span class="mm-board-name" id="board-name">…</span>
+    <span class="badge purple">思维导图</span>
+    <div class="vdivider"></div>
+    <button class="btn sm" id="btn-child">＋ 子节点 <kbd>Tab</kbd></button>
+    <button class="btn sm" id="btn-sibling">＋ 兄弟 <kbd>⏎</kbd></button>
+    <button class="btn sm ghost" id="btn-rename">✏️ 重命名 <kbd>F2</kbd></button>
+    <button class="btn sm ghost danger" id="btn-remove">🗑 删除分支</button>
+    <div class="vdivider"></div>
+    <button class="btn sm ghost" id="btn-collapse">⇄ 折叠/展开</button>
+    <button class="btn sm ghost" id="btn-collapse-all">⊟ 全折叠</button>
+    <button class="btn sm ghost" id="btn-expand-all">⊞ 全展开</button>
+    <div class="vdivider"></div>
+    <select class="select" id="direction" style="width:110px;padding:4px 8px" title="布局方向">
+      <option value="right">→ 向右布局</option>
+      <option value="both">↔ 左右分布</option>
+      <option value="down">↓ 组织架构</option>
+    </select>
+    <button class="btn sm primary" id="btn-layout">✨ 整理布局</button>
+    <span class="spacer"></span>
+    <button class="btn sm ghost" id="btn-undo" title="撤销" disabled>↩︎</button>
+    <button class="btn sm ghost" id="btn-redo" title="重做" disabled>↪︎</button>
+    <div class="vdivider"></div>
+    <button class="btn sm ghost" id="btn-boardmode" title="在白板编辑页打开">🎨 白板模式</button>
+    <div class="ed-users" id="user-bar"></div>
+    <span class="conn-badge" id="conn-badge"><span class="dot off"></span>连接中…</span>
+  </div>
+
+  <div class="mm-body">
+    <aside class="mm-sidebar" id="sidebar">
+      <div class="mm-sidebar-head">🗂 大纲 <span class="spacer"></span><span class="small muted" id="node-count"></span></div>
+      <div class="mm-outline" id="outline"></div>
+      <div style="padding:10px 12px;border-top:1px solid var(--border-soft)" class="small muted">
+        点击定位 · 双击重命名 · ▸ 折叠子树
+      </div>
+    </aside>
+
+    <div class="mm-canvas-host" id="canvas-host">
+      <div class="mm-zoomctl">
+        <button class="btn" id="btn-zoom-in">＋</button>
+        <button class="btn" id="btn-zoom-out">−</button>
+        <button class="btn" id="btn-zoom-fit" title="适应画布">⛶</button>
+      </div>
+      <canvas class="mm-minimap" id="minimap"></canvas>
+      <div class="mm-hint" id="hint">
+        <b>快捷键</b>: <kbd>Tab</kbd> 子节点 · <kbd>Enter</kbd> 兄弟节点 · <kbd>F2</kbd> 重命名 ·
+        <kbd>空格</kbd> 折叠 · <kbd>Del</kbd> 删除分支 · 方向键导航 · 拖动节点自由摆放 ·
+        滚轮平移 / <kbd>Ctrl</kbd>+滚轮缩放
+      </div>
+    </div>
+  </div>
+
+  <div class="mm-status">
+    <span id="st-nodes">节点: 0</span>
+    <span id="st-rev">rev: 0</span>
+    <span id="st-pending">待发: 0</span>
+    <span class="spacer"></span>
+    <span id="st-role"></span>
+    <span id="st-layout">布局: 向右</span>
+  </div>
+</div>
+
+<script type="module">
+import { Api } from './js/api.js';
+import { BoardSocket } from './js/ws.js';
+import { CrdtClient, mergeOps } from './js/crdt-client.js';
+import { BoardEngine } from './js/engine.js';
+import { ToolManager } from './js/tools.js';
+import { MindmapController } from './js/mindmap.js';
+import { syncZCounter } from './js/shapes.js';
+import {
+  avatarHtml, colorOf, escapeHtml, getMe, initPage, loginDialog, qs,
+  toast, promptDialog,
+} from './js/ui.js';
+
+const me = await initPage('mindmap', { gate: true, title: '思维导图' });
+if (!me) throw new Error('未登录');
+
+const boardId = qs('board');
+if (!boardId) {
+  // 未指定白板 → 列出思维导图类白板供选择
+  const { boards } = await Api.boards.list({ sort: 'updated' });
+  const mms = (boards || []).filter((b) => b.mode === 'mindmap');
+  document.body.innerHTML = `
+    <div class="empty-state" style="height:100vh;justify-content:center">
+      <div class="icon">🧠</div><div class="title">选择一个思维导图</div>
+      <div class="col mt16" style="min-width:320px">
+        ${mms.map((b) => `<a class="btn" href="/mindmap.html?board=${b.id}">🧠 ${escapeHtml(b.name)} <span class="muted small">${b.stats?.shapes ?? 0} 节点</span></a>`).join('')
+          || '<div class="muted small">还没有思维导图, 去列表页新建(mode=思维导图)</div>'}
+        <a class="btn primary" href="/index.html">返回白板列表</a>
+      </div>
+    </div>`;
+  throw new Error('awaiting-board-selection');
+}
+
+/* ---------------------------------------------------------------- 基础对象 */
+const host = document.getElementById('canvas-host');
+const engine = new BoardEngine(host, { page: 'mindmap', background: '#fbfbf9', gridDots: true });
+const shapes = new Map();
+engine.setShapesMap(shapes);
+
+const crdt = new CrdtClient(`m${(Math.random() * 1e6 | 0).toString(36)}${Date.now().toString(36)}`);
+const socket = new BoardSocket(boardId, { page: 'mindmap' });
+crdt.onOps = (ops) => { socket.sendOps(ops); updateStatus(); };
+
+const tools = new ToolManager({
+  engine, crdt, socket, shapes,
+  opts: {
+    snap: false, me, noKeyboard: true,       // 快捷键由 MindmapController 接管
+    style: { stroke: '#61c0a8', fill: '#ffffff', strokeWidth: 2, fontSize: 15 },
+    onPresence: (p) => socket.sendPresence({ ...p, page: 'mindmap' }),
+    onSelectionChange: (ids) => {
+      controller.selectedId = ids.length === 1 ? ids[0] : controller.selectedId;
+      if (ids.length === 1) controller.select(ids[0]);
+      else controller.renderOutline();
+    },
+    onHistoryChange: () => { updateHistoryButtons(); controller.renderOutline(); updateStatus(); },
+  },
+});
+// 只保留选择/平移两个工具
+tools.setTool('select');
+
+const controller = new MindmapController({
+  engine, crdt, shapes, tools,
+  opts: {
+    me,
+    outlineEl: document.getElementById('outline'),
+  },
+});
+controller.installKeyboard();
+
+const $ = (id) => document.getElementById(id);
+let myRole = 'viewer';
+let boardMeta = null;
+
+/* ---------------------------------------------------------------- 顶栏动作 */
+$('btn-sidebar').onclick = () => $('sidebar').classList.toggle('collapsed');
+$('btn-child').onclick = () => controller.addChild();
+$('btn-sibling').onclick = () => controller.addSibling();
+$('btn-rename').onclick = () => controller.renameSelected();
+$('btn-remove').onclick = () => controller.removeNode();
+$('btn-collapse').onclick = () => controller.toggleCollapse();
+$('btn-collapse-all').onclick = () => controller.collapseAll();
+$('btn-expand-all').onclick = () => controller.expandAll();
+$('btn-layout').onclick = () => { controller.autoLayout(); setTimeout(updateMinimap, 300); };
+$('direction').onchange = (e) => {
+  controller.setDirection(e.target.value);
+  $('st-layout').textContent = `布局: ${{ right: '向右', both: '左右分布', down: '组织架构' }[e.target.value]}`;
+  setTimeout(updateMinimap, 300);
+};
+$('btn-boardmode').onclick = () => { location.href = `/editor.html?board=${boardId}`; };
+$('btn-undo').onclick = () => { tools.undo(); afterChange(true); };
+$('btn-redo').onclick = () => { tools.redo(); afterChange(true); };
+$('btn-zoom-in').onclick = () => engine.zoomAt(1.25, engine.width / 2, engine.height / 2);
+$('btn-zoom-out').onclick = () => engine.zoomAt(0.8, engine.width / 2, engine.height / 2);
+$('btn-zoom-fit').onclick = () => { engine.fitToContent(120); updateMinimap(); };
+
+$('board-name').onclick = async () => {
+  if (!['owner', 'editor'].includes(myRole)) return;
+  const name = await promptDialog('白板名称', { value: boardMeta?.name || '' });
+  if (!name) return;
+  try {
+    const { board } = await Api.boards.patch(boardId, { name });
+    boardMeta = board;
+    $('board-name').textContent = board.name;
+    document.title = `${board.name} · 思维导图`;
+  } catch (err) { toast(err.message, 'error'); }
+};
+
+function updateHistoryButtons() {
+  $('btn-undo').disabled = !crdt.canUndo();
+  $('btn-redo').disabled = !crdt.canRedo();
+}
+
+function updateStatus() {
+  $('st-nodes').textContent = `节点: ${controller.nodes().length}`;
+  $('st-rev').textContent = `rev: ${socket.lastRev}`;
+  $('st-pending').textContent = `待发: ${socket.pendingCount()}`;
+  $('node-count').textContent = `${controller.nodes().length} 节点`;
+}
+
+function afterChange(relayout = false) {
+  controller.renderOutline();
+  updateStatus();
+  updateHistoryButtons();
+  if (relayout) engine.markDirty();
+  setTimeout(updateMinimap, 120);
+}
+
+function setConnBadge(status, extra = {}) {
+  const map = { open: ['on', '已连接'], connecting: ['off', '连接中…'],
+    reconnecting: ['off', `重连中(${extra.retry || 1})…`], closed: ['off', '离线'], idle: ['off', '未连接'] };
+  const [cls, text] = map[status] || ['off', status];
+  $('conn-badge').innerHTML = `<span class="dot ${cls}"></span>${text}`;
+}
+window.addEventListener('wb:conn-status', (e) => {
+  if (e.detail.boardId === boardId) setConnBadge(e.detail.status, e.detail);
+  updateStatus();
+});
+
+function renderUsers(clients) {
+  const entries = Object.values(clients || {});
+  $('user-bar').innerHTML = entries.slice(0, 5).map((c) =>
+    avatarHtml({ display_name: c.display_name || c.user, color: c.color || colorOf(c.user) }, 'sm')).join('')
+    + (entries.length > 5 ? `<span class="badge sm">+${entries.length - 5}</span>` : '');
+}
+
+/* ---------------------------------------------------------------- 小地图 */
+const minimap = $('minimap');
+function updateMinimap() {
+  minimap.width = 190 * 2; minimap.height = 128 * 2;
+  minimap.style.width = '190px'; minimap.style.height = '128px';
+  engine.drawMinimap(minimap, 6);
+}
+setInterval(updateMinimap, 1500);
+
+/* ---------------------------------------------------------------- 协同管线 */
+function structuralOps(ops) {
+  for (const op of ops || []) {
+    const list = op.type === 'batch' ? (op.ops || []) : [op];
+    for (const sub of list) {
+      if (['add_shape', 'delete_shape', 'restore_shape', 'reparent'].includes(sub.type)) return true;
+      if (sub.type === 'set_props' && sub.props && ('collapsed' in sub.props || 'text' in sub.props || 'parent' in sub.props)) return true;
+    }
+  }
+  return false;
+}
+
+socket.on('welcome', (msg) => {
+  myRole = msg.role || 'viewer';
+  $('st-role').textContent = `角色: ${myRole}`;
+  if (msg.board) {
+    boardMeta = { ...(boardMeta || {}), ...msg.board };
+    $('board-name').textContent = boardMeta.name || '…';
+    document.title = `${boardMeta.name} · 思维导图`;
+  }
+  if (msg.state) {
+    shapes.clear();
+    for (const s of msg.state.shapes || []) shapes.set(s.id, s);
+    engine.rebuildIndex();
+    syncZCounter(shapes);
+  } else if (msg.catchup?.ops?.length) {
+    for (const op of msg.catchup.ops) crdt.witness(op);
+    const touched = mergeOps(shapes, msg.catchup.ops);
+    engine.onShapesChanged(touched);
+    toast(`已补发 ${msg.catchup.ops.length} 个离线期间的操作`, 'success');
+  }
+  renderUsers(msg.clients);
+  tools.readOnly = myRole === 'viewer' || myRole === 'commenter';
+  if (tools.readOnly) {
+    $('btn-child').disabled = $('btn-sibling').disabled = $('btn-remove').disabled = true;
+    $('btn-layout').disabled = true;
+    toast('当前角色只读, 无法编辑导图', 'warn');
+  }
+  if (!controller.rootNode() && !tools.readOnly) controller.ensureRoot();
+  controller.renderOutline();
+  engine.fitToContent(120);
+  afterChange();
+});
+
+socket.on('ops', (msg) => {
+  for (const op of msg.ops || []) crdt.witness(op);
+  const touched = mergeOps(shapes, msg.ops || []);
+  engine.onShapesChanged(touched);
+  if (structuralOps(msg.ops)) controller.onRemoteStructuralChange();
+  else controller.renderOutline();
+  updateStatus();
+  setTimeout(updateMinimap, 200);
+});
+
+socket.on('ack', () => updateStatus());
+socket.on('cursor', (msg) => {
+  engine.updateRemoteCursor(`${msg.user}@${msg.client_id}`, {
+    cursor: msg.cursor, color: msg.color || colorOf(msg.user),
+    name: msg.display_name || msg.user, tool: msg.tool,
+    selection: msg.selection, page: msg.page || 'mindmap',
+  });
+});
+socket.on('leave', (msg) => {
+  const key = Object.keys(engine.remoteCursors).find((k) => k.startsWith(`${msg.user}@`));
+  if (key) engine.removeRemoteCursor(key);
+});
+socket.on('presence', (msg) => renderUsers(msg.clients));
+socket.on('hello_ok', (msg) => renderUsers(msg.clients));
+socket.on('error', (msg) => {
+  if (msg.code === 'read_only') toast(msg.message || '只读', 'warn');
+});
+socket.on('fatal', async (msg) => {
+  if (msg.code === 4401) { if (await loginDialog('会话已过期')) location.reload(); }
+  else if (msg.code === 4403) toast('你没有该白板的访问权限', 'error', 6000);
+});
+
+/* ---------------------------------------------------------------- 初始加载 */
+try {
+  const data = await Api.boards.state(boardId);
+  boardMeta = data.board;
+  myRole = data.your_role;
+  $('board-name').textContent = boardMeta.name || '思维导图';
+  document.title = `${boardMeta.name} · 思维导图`;
+  $('st-role').textContent = `角色: ${myRole}`;
+  for (const s of data.shapes || []) shapes.set(s.id, s);
+  socket.lastRev = data.rev || 0;
+  engine.rebuildIndex();
+  syncZCounter(shapes);
+  tools.readOnly = myRole === 'viewer' || myRole === 'commenter';
+  if (!controller.rootNode() && !tools.readOnly) controller.ensureRoot();
+  controller.renderOutline();
+  engine.fitToContent(120);
+  updateStatus();
+} catch (err) {
+  if (err.status === 403 || err.status === 404) {
+    document.body.innerHTML = `<div class="empty-state" style="height:100vh"><div class="icon">${err.status === 403 ? '🔒' : '❓'}</div>
+      <div class="title">${err.status === 403 ? '无权访问该白板' : '白板不存在'}</div>
+      <div><a href="/index.html">返回白板列表</a></div></div>`;
+    throw err;
+  }
+  toast(err.message || '加载失败', 'error');
+}
+socket.connect();
+
+/* 双击节点重命名由 tools 的双击处理; 单击节点同步大纲选择 */
+setInterval(() => { updateHistoryButtons(); }, 1000);
+setTimeout(() => $('hint') && ($('hint').style.opacity = '0.55'), 6000);
+updateHistoryButtons();
+</script>
+</body>
+</html>

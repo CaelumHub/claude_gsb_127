@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>系统设置 · CoBoard 协同白板</title>
+<link rel="stylesheet" href="/css/common.css">
+<style>
+  .settings-wrap { max-width: 980px; margin: 0 auto; }
+  .tab-section { display: none; margin-top: 16px; }
+  .tab-section.active { display: block; animation: wb-fade .18s ease; }
+
+  .pref-row {
+    display: flex; align-items: center; gap: 14px;
+    padding: 13px 4px; border-bottom: 1px solid var(--border-soft);
+  }
+  .pref-row:last-child { border-bottom: none; }
+  .pref-row .lbl { width: 220px; flex: none; font-weight: 600; font-size: 13.5px; }
+  .pref-row .desc { flex: 1; color: var(--text-mute); font-size: 12.5px; }
+  .pref-row .ctl { flex: none; display: flex; align-items: center; gap: 8px; }
+  .pref-row .ctl .input[type=number], .pref-row .ctl .input { width: 130px; }
+  @media (max-width: 760px) {
+    .pref-row { flex-wrap: wrap; }
+    .pref-row .lbl { width: 100%; }
+    .pref-row .desc { order: 3; width: 100%; }
+  }
+
+  .swatches { display: flex; gap: 6px; }
+  .swatch {
+    width: 22px; height: 22px; border-radius: 6px; cursor: pointer;
+    border: 2px solid transparent; transition: transform .1s;
+  }
+  .swatch:hover { transform: scale(1.15); }
+  .swatch.active { border-color: var(--accent); }
+
+  .stat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+  .stat-card { padding: 14px; border-radius: var(--radius); background: var(--bg-elevated); border: 1px solid var(--border-soft); }
+  .stat-card .v { font-size: 20px; font-weight: 800; color: var(--accent-text); font-family: var(--mono); }
+  .stat-card .k { font-size: 12px; color: var(--text-mute); margin-top: 2px; }
+
+  .danger-zone { border-color: var(--red) !important; }
+  .danger-zone .panel-head { color: var(--red); }
+
+  .kbd-table td { padding: 7px 12px; }
+  .kbd-table td:first-child { white-space: nowrap; }
+
+  .server-hint {
+    padding: 10px 14px; margin-bottom: 12px; border-radius: var(--radius-sm);
+    background: var(--accent-soft); color: var(--accent-text); font-size: 12.5px;
+  }
+</style>
+</head>
+<body class="scrollable">
+<div class="wb-page">
+  <main class="wb-main">
+    <div class="wb-container settings-wrap">
+      <div class="wb-page-head">
+        <div>
+          <div class="wb-page-title">⚙️ 系统设置</div>
+          <div class="wb-page-sub">个人偏好保存在浏览器本地; 服务端参数需管理员权限</div>
+        </div>
+      </div>
+
+      <div class="tabs" id="tabs">
+        <div class="tab active" data-tab="prefs">🎛 个人偏好</div>
+        <div class="tab" data-tab="server">🖥 服务端参数</div>
+        <div class="tab" data-tab="status">📊 系统状态</div>
+        <div class="tab" data-tab="about">ℹ️ 关于与危险区</div>
+      </div>
+
+      <!-- ============================ 个人偏好 -->
+      <section class="tab-section active" data-tab="prefs">
+        <div class="panel">
+          <div class="panel-head">外观与画布 <span class="spacer"></span>
+            <button class="btn sm" id="btn-reset-prefs">恢复默认</button></div>
+          <div class="panel-body" id="prefs-appearance"></div>
+        </div>
+        <div class="panel mt16">
+          <div class="panel-head">编辑器默认值</div>
+          <div class="panel-body" id="prefs-editor"></div>
+        </div>
+        <div class="panel mt16">
+          <div class="panel-head">协作</div>
+          <div class="panel-body" id="prefs-collab"></div>
+        </div>
+        <div class="small muted mt8">偏好保存在本浏览器 localStorage(键 <span class="mono">wb_prefs</span>), 白板编辑/思维导图页会读取这些默认值。</div>
+      </section>
+
+      <!-- ============================ 服务端参数 -->
+      <section class="tab-section" data-tab="server">
+        <div id="server-hint-slot"></div>
+        <div class="panel">
+          <div class="panel-head">运行参数
+            <span class="spacer"></span>
+            <span class="save-bar-hint small hidden" id="server-dirty" style="color:var(--orange)">● 有未保存修改</span>
+            <button class="btn primary sm" id="btn-save-server" disabled>保存参数</button>
+          </div>
+          <div class="panel-body" id="server-body">
+            <div class="empty-state"><div class="icon">⏳</div><div>加载中…</div></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============================ 系统状态 -->
+      <section class="tab-section" data-tab="status">
+        <div class="panel">
+          <div class="panel-head">实时状态
+            <span class="spacer"></span>
+            <span class="small muted" id="status-time"></span>
+            <button class="btn sm" id="btn-refresh-status">↻ 刷新</button>
+          </div>
+          <div class="panel-body">
+            <div class="stat-grid" id="stat-grid"></div>
+            <div class="divider"></div>
+            <div class="bold mb8">在线房间</div>
+            <div id="rooms-slot"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============================ 关于与危险区 -->
+      <section class="tab-section" data-tab="about">
+        <div class="panel">
+          <div class="panel-head">关于</div>
+          <div class="panel-body">
+            <div class="row" style="gap:14px">
+              <div>
+                <div style="font-size:17px;font-weight:800">CoBoard 协同白板与思维导图 <span class="badge accent">v1.0.0</span></div>
+                <div class="small muted mt8" style="max-width:640px;line-height:1.8">
+                  FastAPI + WebSocket 实时协同后端, 操作型 CRDT(移动增量合成 + 字段级 LWW 寄存器)解决图形冲突,
+                  画布状态 / 操作历史 / 权限全部以 JSON 文件存储 —— 每白板独立目录, 日志按小时分片, 周期快照支撑快速回放,
+                  原子写入(tmp + fsync + rename)保证并发安全。
+                </div>
+              </div>
+            </div>
+            <div class="divider"></div>
+            <div class="bold mb8">快捷键速查(白板编辑页)</div>
+            <div class="table-wrap">
+              <table class="wb-table kbd-table">
+                <tbody>
+                  <tr><td><kbd>V</kbd> <kbd>H</kbd> <kbd>P</kbd> <kbd>L</kbd> <kbd>A</kbd> <kbd>R</kbd> <kbd>O</kbd> <kbd>D</kbd> <kbd>N</kbd> <kbd>T</kbd> <kbd>C</kbd> <kbd>X</kbd></td>
+                      <td class="soft">选择 / 平移 / 画笔 / 直线 / 箭头 / 矩形 / 椭圆 / 菱形 / 便签 / 文本 / 连线 / 橡皮</td></tr>
+                  <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd> · <kbd>Ctrl</kbd>+<kbd>Y</kbd></td><td class="soft">撤销 / 重做(发布逆操作, 协同安全)</td></tr>
+                  <tr><td><kbd>Ctrl</kbd>+<kbd>C</kbd> <kbd>V</kbd> <kbd>D</kbd> <kbd>A</kbd></td><td class="soft">复制 / 粘贴 / 创建副本 / 全选</td></tr>
+                  <tr><td><kbd>Delete</kbd> · 方向键</td><td class="soft">删除选中 · 微移(按住 Shift ×10)</td></tr>
+                  <tr><td><kbd>空格</kbd>拖拽 · <kbd>Ctrl</kbd>+滚轮</td><td class="soft">平移画布 · 以光标为中心缩放</td></tr>
+                  <tr><td>双击空白 · 双击图形 · <kbd>F2</kbd></td><td class="soft">快速便签 · 编辑文本 · 重命名</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel mt16 danger-zone">
+          <div class="panel-head">⚠️ 危险区</div>
+          <div class="panel-body">
+            <div class="pref-row">
+              <div class="lbl">清除本地缓存</div>
+              <div class="desc">删除本浏览器所有 <span class="mono">wb_</span> 前缀的 localStorage 键(主题、偏好、离线操作队列、rev 游标、登录令牌)。不影响服务端任何数据; 清除后需要重新登录。</div>
+              <div class="ctl"><button class="btn danger sm" id="btn-clear-local">清除…</button></div>
+            </div>
+            <div class="pref-row">
+              <div class="lbl">重置演示数据</div>
+              <div class="desc">演示用户/白板/历史由服务端首次启动播种。重置需在服务器命令行执行(会清空 data/ 目录, 下次启动重新播种):</div>
+              <div class="ctl"><code class="mono" style="background:var(--bg-elevated);padding:6px 10px;border-radius:6px">python run.py --reset-demo</code></div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<script type="module">
+import { Api } from './js/api.js';
+import {
+  applyTheme, confirmDialog, debounce, escapeHtml, fmtBytes, fmtTime,
+  initPage, toast,
+} from './js/ui.js';
+
+const me = await initPage('settings', { gate: true, title: '系统设置' });
+if (me) main(me);
+
+/* ================================================================ 个人偏好 */
+const PREFS_KEY = 'wb_prefs';
+const DEFAULT_PREFS = {
+  theme: 'dark', gridDots: true, snap: false, showRemoteCursors: true,
+  showChatNotify: true, defaultTool: 'select', defaultStroke: '#374151',
+  defaultFill: '#ffffff', defaultStrokeWidth: 2, defaultFontSize: 14,
+  noteColorRandom: true,
+};
+const STROKE_SWATCHES = ['#374151', '#e8684a', '#3b6fd4', '#2e9e6b', '#d48806', '#7e5fd0', '#d4526a'];
+const FILL_SWATCHES = ['#ffffff', '#fff9b1', '#ffd6e7', '#d3f0ff', '#d9f7be', '#ffe7ba', '#efdbff'];
+const TOOL_OPTIONS = [
+  ['select', '选择'], ['pan', '平移'], ['pen', '画笔'], ['line', '直线'], ['arrow', '箭头'],
+  ['rect', '矩形'], ['ellipse', '椭圆'], ['diamond', '菱形'], ['note', '便签'],
+  ['text', '文本'], ['edge', '连线'], ['eraser', '橡皮'],
+];
+
+let prefs = loadPrefs();
+
+function loadPrefs() {
+  let stored = {};
+  try { stored = JSON.parse(localStorage.getItem(PREFS_KEY) || '{}'); } catch { stored = {}; }
+  return { ...DEFAULT_PREFS, ...stored };
+}
+
+const savePrefs = debounce(() => {
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch { /* 隐私模式 */ }
+}, 200);
+
+function setPref(key, value) {
+  prefs[key] = value;
+  savePrefs();
+  if (key === 'theme') applyTheme(value);
+}
+
+function switchRow(key, label, desc) {
+  return `
+  <div class="pref-row">
+    <div class="lbl">${label}</div>
+    <div class="desc">${desc}</div>
+    <div class="ctl">
+      <label class="switch"><input type="checkbox" data-pref="${key}" ${prefs[key] ? 'checked' : ''}><span class="slider"></span></label>
+    </div>
+  </div>`;
+}
+
+function renderPrefs() {
+  document.getElementById('prefs-appearance').innerHTML = `
+    <div class="pref-row">
+      <div class="lbl">主题</div>
+      <div class="desc">暗色适合演示与夜间协作, 亮色适合打印预览与强光环境</div>
+      <div class="ctl">
+        <div class="btn-group">
+          <button class="btn sm ${prefs.theme === 'dark' ? 'active' : ''}" data-theme-set="dark">🌙 暗色</button>
+          <button class="btn sm ${prefs.theme === 'light' ? 'active' : ''}" data-theme-set="light">☀️ 亮色</button>
+        </div>
+      </div>
+    </div>
+    ${switchRow('gridDots', '画布点阵网格', '白板背景显示点阵参考网格(导出时可选是否包含)')}
+    ${switchRow('snap', '对齐到网格', '绘制与移动时坐标吸附到 12px 网格')}
+    ${switchRow('noteColorRandom', '便签随机配色', '新建便签自动从 6 色柔和色板中随机取色')}
+  `;
+
+  document.getElementById('prefs-editor').innerHTML = `
+    <div class="pref-row">
+      <div class="lbl">默认工具</div>
+      <div class="desc">进入白板编辑页时选中的工具</div>
+      <div class="ctl">
+        <select class="select" data-pref="defaultTool" style="width:130px">
+          ${TOOL_OPTIONS.map(([v, l]) => `<option value="${v}" ${prefs.defaultTool === v ? 'selected' : ''}>${l}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="pref-row">
+      <div class="lbl">默认描边颜色</div>
+      <div class="desc">画笔/图形/连线的初始 stroke</div>
+      <div class="ctl">
+        <div class="swatches" data-sw="defaultStroke">
+          ${STROKE_SWATCHES.map((c) => `<span class="swatch ${prefs.defaultStroke === c ? 'active' : ''}" data-c="${c}" style="background:${c}"></span>`).join('')}
+        </div>
+        <input type="color" data-pref="defaultStroke" value="${prefs.defaultStroke}">
+      </div>
+    </div>
+    <div class="pref-row">
+      <div class="lbl">默认填充颜色</div>
+      <div class="desc">矩形/椭圆/菱形的初始 fill(便签始终用随机色板)</div>
+      <div class="ctl">
+        <div class="swatches" data-sw="defaultFill">
+          ${FILL_SWATCHES.map((c) => `<span class="swatch ${prefs.defaultFill === c ? 'active' : ''}" data-c="${c}" style="background:${c};${c === '#ffffff' ? 'border:1px solid var(--border)' : ''}"></span>`).join('')}
+        </div>
+        <input type="color" data-pref="defaultFill" value="${prefs.defaultFill}">
+      </div>
+    </div>
+    <div class="pref-row">
+      <div class="lbl">默认线宽</div>
+      <div class="desc">strokeWidth, 1 - 12 px</div>
+      <div class="ctl">
+        <input type="range" min="1" max="12" step="1" data-pref="defaultStrokeWidth" value="${prefs.defaultStrokeWidth}">
+        <span class="mono" data-out="defaultStrokeWidth">${prefs.defaultStrokeWidth}px</span>
+      </div>
+    </div>
+    <div class="pref-row">
+      <div class="lbl">默认字号</div>
+      <div class="desc">fontSize, 10 - 48 px</div>
+      <div class="ctl">
+        <input type="range" min="10" max="48" step="1" data-pref="defaultFontSize" value="${prefs.defaultFontSize}">
+        <span class="mono" data-out="defaultFontSize">${prefs.defaultFontSize}px</span>
+      </div>
+    </div>
+  `;
+
+  document.getElementById('prefs-collab').innerHTML = `
+    ${switchRow('showRemoteCursors', '显示远程光标', '在画布上实时渲染其他协作者的光标、名字与选择高亮')}
+    ${switchRow('showChatNotify', '聊天消息通知', '收到新聊天消息时弹出 toast 提醒(白板页侧栏角标不受影响)')}
+  `;
+
+  bindPrefsEvents();
+}
+
+function bindPrefsEvents() {
+  document.querySelectorAll('[data-theme-set]').forEach((btn) => {
+    btn.onclick = () => { setPref('theme', btn.dataset.themeSet); renderPrefs(); };
+  });
+  document.querySelectorAll('input[data-pref]').forEach((input) => {
+    const key = input.dataset.pref;
+    const handler = () => {
+      if (input.type === 'checkbox') setPref(key, input.checked);
+      else if (input.type === 'range' || input.type === 'number') setPref(key, Number(input.value));
+      else setPref(key, input.value);
+      const out = document.querySelector(`[data-out="${key}"]`);
+      if (out) out.textContent = `${input.value}px`;
+      // 色板选中态同步
+      document.querySelectorAll(`.swatches[data-sw="${key}"] .swatch`).forEach((s) => {
+        s.classList.toggle('active', s.dataset.c === input.value);
+      });
+    };
+    input.addEventListener('change', handler);
+    input.addEventListener('input', () => { if (input.type === 'range') handler(); });
+  });
+  document.querySelectorAll('select[data-pref]').forEach((sel) => {
+    sel.onchange = () => setPref(sel.dataset.pref, sel.value);
+  });
+  document.querySelectorAll('.swatches[data-sw]').forEach((host) => {
+    host.querySelectorAll('.swatch').forEach((sw) => {
+      sw.onclick = () => {
+        const key = host.dataset.sw;
+        setPref(key, sw.dataset.c);
+        const input = document.querySelector(`input[data-pref="${key}"]`);
+        if (input) input.value = sw.dataset.c;
+        host.querySelectorAll('.swatch').forEach((x) => x.classList.toggle('active', x === sw));
+      };
+    });
+  });
+  document.getElementById('btn-reset-prefs').onclick = async () => {
+    if (await confirmDialog('恢复全部个人偏好为默认值?')) {
+      prefs = { ...DEFAULT_PREFS };
+      savePrefs();
+      applyTheme(prefs.theme);
+      renderPrefs();
+      toast('已恢复默认偏好', 'success');
+    }
+  };
+}
+
+/* ================================================================ 服务端参数 */
+const SETTING_META = [
+  ['site_name', '站点名称', 'text', '显示在标题与顶栏的站点名'],
+  ['snapshot_interval_ops', '快照间隔 · 操作数', 'int', '每积累 N 个操作折叠一次状态快照 —— 回放跳转/断线补发越快, 但快照文件越多'],
+  ['snapshot_interval_secs', '快照间隔 · 秒', 'int', '有操作且距上次快照超过 N 秒时也触发快照(与操作数条件取先到者)'],
+  ['history_retention_days', '日志保留天数', 'int', '操作日志分片超过 N 天自动删除(快照仍保留, 只影响可回放的粒度)'],
+  ['snapshot_keep', '快照保留数量', 'int', '每白板保留的最近快照个数, 超出自动修剪最旧的'],
+  ['max_ops_per_batch', '单消息最大操作数', 'int', '一条 WebSocket 消息可携带的操作上限, 超出部分被截断'],
+  ['max_shapes_per_board', '单白板图元上限', 'int', '达到上限后 add_shape 被拒绝(防单文件膨胀拖垮渲染)'],
+  ['op_flush_interval_ms', '日志落盘间隔 ms', 'int', '操作日志缓冲追加的 fsync 节奏(暂保留字段, 当前每次追加即写)'],
+  ['presence_throttle_ms', 'presence 节流 ms', 'int', '在线光标状态广播的最小间隔'],
+  ['board_idle_unload_secs', '空闲卸载秒数', 'int', '无连接且无访问超过 N 秒的白板文档卸载出内存(先落快照)'],
+  ['chat_message_max_len', '聊天长度上限', 'int', '单条聊天消息最大字符数'],
+  ['allow_register', '允许自助注册', 'bool', '关闭后登录页只能使用已有账号(首个注册用户恒为管理员)'],
+  ['max_clients_per_board', '单白板连接上限', 'int', '同一白板同时在线的 WebSocket 连接数上限, 超出拒绝接入'],
+  ['compact_archived_shards', '自动压缩归档分片', 'bool', '每小时对「快照之下且非当天」的日志分片做物理压缩(合并 move、丢弃被覆盖的旧属性, 终态等价)'],
+];
+
+let serverSettings = null;
+let serverEditable = false;
+let pendingServer = {};
+
+async function loadServerSettings() {
+  const body = document.getElementById('server-body');
+  try {
+    const data = await Api.settings.get();
+    serverSettings = data.settings || {};
+    serverEditable = !!data.is_admin;
+  } catch (err) {
+    body.innerHTML = `<div class="empty-state"><div class="icon">⚠️</div><div>${escapeHtml(err.message || '加载失败')}</div></div>`;
+    return;
+  }
+  pendingServer = { ...serverSettings };
+  document.getElementById('server-hint-slot').innerHTML = serverEditable
+    ? '<div class="server-hint">你是管理员, 修改后立即对全部白板生效(下一次快照/广播按新参数执行)。</div>'
+    : '<div class="server-hint">只读视图: 服务端参数仅管理员可修改, 这里展示与你相关的子集。</div>';
+  document.getElementById('btn-save-server').classList.toggle('hidden', !serverEditable);
+
+  const rows = SETTING_META.filter(([key]) => key in serverSettings).map(([key, label, type, desc]) => {
+    const value = pendingServer[key];
+    let ctl;
+    if (type === 'bool') {
+      ctl = `<label class="switch"><input type="checkbox" data-set="${key}" ${value ? 'checked' : ''} ${serverEditable ? '' : 'disabled'}><span class="slider"></span></label>`;
+    } else if (type === 'int') {
+      ctl = `<input class="input" type="number" data-set="${key}" value="${Number(value) || 0}" min="0" ${serverEditable ? '' : 'disabled'}>`;
+    } else {
+      ctl = `<input class="input" type="text" data-set="${key}" value="${escapeHtml(String(value ?? ''))}" ${serverEditable ? '' : 'disabled'}>`;
+    }
+    return `
+    <div class="pref-row">
+      <div class="lbl">${label}<div class="mono" style="font-weight:400;color:var(--text-mute)">${key}</div></div>
+      <div class="desc">${desc}</div>
+      <div class="ctl">${ctl}</div>
+    </div>`;
+  }).join('');
+  body.innerHTML = rows || '<div class="empty-state"><div class="icon">🈳</div><div>无可配置参数</div></div>';
+
+  body.querySelectorAll('[data-set]').forEach((input) => {
+    input.addEventListener('change', () => {
+      const key = input.dataset.set;
+      if (input.type === 'checkbox') pendingServer[key] = input.checked;
+      else if (input.type === 'number') pendingServer[key] = Number(input.value);
+      else pendingServer[key] = input.value;
+      updateServerDirty();
+    });
+  });
+  updateServerDirty();
+}
+
+function updateServerDirty() {
+  const dirty = JSON.stringify(pendingServer) !== JSON.stringify(serverSettings);
+  document.getElementById('btn-save-server').disabled = !dirty || !serverEditable;
+  document.getElementById('server-dirty').classList.toggle('hidden', !dirty);
+}
+
+async function saveServerSettings() {
+  try {
+    const data = await Api.settings.put(pendingServer);
+    serverSettings = data.settings || pendingServer;
+    pendingServer = { ...serverSettings };
+    updateServerDirty();
+    toast('服务端参数已保存', 'success');
+    loadServerSettings();
+  } catch (err) {
+    toast(err.message || '保存失败', 'error');
+  }
+}
+
+/* ================================================================ 系统状态 */
+let statusTimer = null;
+
+async function loadStatus() {
+  const grid = document.getElementById('stat-grid');
+  const roomsSlot = document.getElementById('rooms-slot');
+  try {
+    const [stats, health] = await Promise.all([Api.system.stats(), Api.system.health()]);
+    const cards = [
+      ['白板总数', stats.boards], ['内存驻留文档', stats.boards_in_memory],
+      ['注册用户', stats.users], ['在线客户端', stats.online_clients],
+      ['数据目录体积', fmtBytes(stats.data_bytes)], ['操作日志体积', fmtBytes(stats.ops_log_bytes)],
+      ['累计操作数', (stats.total_ops ?? 0).toLocaleString()], ['服务启动于', fmtTime(stats.uptime_started_at)],
+    ];
+    grid.innerHTML = cards.map(([k, v]) =>
+      `<div class="stat-card"><div class="v">${v ?? '—'}</div><div class="k">${k}</div></div>`).join('');
+    const rooms = Object.entries(stats.online_rooms || {});
+    roomsSlot.innerHTML = rooms.length
+      ? `<div class="table-wrap"><table class="wb-table">
+          <thead><tr><th>白板 ID</th><th>在线连接</th></tr></thead>
+          <tbody>${rooms.map(([bid, n]) => `<tr><td class="mono">${escapeHtml(bid)}</td><td><span class="badge green">${n}</span></td></tr>`).join('')}</tbody>
+        </table></div>`
+      : '<div class="small muted">当前没有在线房间</div>';
+    document.getElementById('status-time').innerHTML =
+      `<span class="dot ${health.ok ? 'on' : 'off'}"></span> 健康检查 ${health.ok ? '正常' : '异常'} · ${fmtTime(stats.uptime_started_at ? Date.now() : 0, true)}`;
+    void stats.data_dir;
+  } catch (err) {
+    grid.innerHTML = `<div class="empty-state"><div class="icon">⚠️</div><div>${escapeHtml(err.message || '加载失败(需要管理员)')}</div></div>`;
+  }
+}
+
+/* ================================================================ 危险区 */
+async function clearLocalCache() {
+  const keys = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k && k.startsWith('wb_')) keys.push(k);
+  }
+  if (!keys.length) { toast('没有需要清除的本地缓存', 'info'); return; }
+  const ok = await confirmDialog(
+    `将删除 ${keys.length} 个本地键(含登录令牌、偏好、离线操作队列):\n${keys.slice(0, 8).join(', ')}${keys.length > 8 ? ' …' : ''}\n\n服务端数据不受影响, 但需要重新登录。`,
+    { title: '清除本地缓存', danger: true });
+  if (!ok) return;
+  keys.forEach((k) => localStorage.removeItem(k));
+  toast('本地缓存已清除, 即将重新登录', 'success');
+  setTimeout(() => location.reload(), 900);
+}
+
+/* ================================================================ Tabs */
+function main(me) {
+  renderPrefs();
+  applyTheme(prefs.theme);
+
+  const tabs = document.getElementById('tabs');
+  const isAdmin = me.role === 'admin';
+  if (!isAdmin) tabs.querySelector('[data-tab="status"]').classList.add('hidden');
+
+  tabs.querySelectorAll('.tab').forEach((tab) => {
+    tab.onclick = () => {
+      tabs.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t === tab));
+      document.querySelectorAll('.tab-section').forEach((sec) => {
+        sec.classList.toggle('active', sec.dataset.tab === tab.dataset.tab);
+      });
+      if (tab.dataset.tab === 'server' && !serverSettings) loadServerSettings();
+      if (tab.dataset.tab === 'status') {
+        loadStatus();
+        clearInterval(statusTimer);
+        statusTimer = setInterval(loadStatus, 10_000);
+      } else {
+        clearInterval(statusTimer);
+        statusTimer = null;
+      }
+    };
+  });
+
+  document.getElementById('btn-save-server').onclick = saveServerSettings;
+  document.getElementById('btn-refresh-status').onclick = loadStatus;
+  document.getElementById('btn-clear-local').onclick = clearLocalCache;
+
+  loadServerSettings();
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>模板库 · CoBoard 协同白板</title>
+<link rel="stylesheet" href="/css/common.css">
+<style>
+  .tpl-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+  .cat-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .cat-chip {
+    padding: 5px 13px; border-radius: 20px; font-size: 12.5px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--bg-panel); color: var(--text-soft);
+    user-select: none; transition: all .15s;
+  }
+  .cat-chip:hover { border-color: var(--text-mute); color: var(--text); }
+  .cat-chip.active { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+
+  .tpl-card { padding: 0; overflow: hidden; position: relative; }
+  .tpl-thumb {
+    height: 160px; display: flex; align-items: center; justify-content: center;
+    background: #fbfbf9; border-bottom: 1px solid var(--border-soft); overflow: hidden;
+  }
+  .tpl-thumb canvas { display: block; }
+  .tpl-thumb .loading { color: #9aa4b5; font-size: 12px; }
+  .tpl-info { padding: 12px 14px; }
+  .tpl-info .name-row { display: flex; align-items: center; gap: 6px; }
+  .tpl-info .name { font-weight: 700; font-size: 14.5px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tpl-info .badges { display: flex; gap: 5px; margin-top: 6px; flex-wrap: wrap; }
+  .tpl-info .desc { font-size: 12px; color: var(--text-mute); margin-top: 6px; min-height: 18px; }
+  .tpl-del {
+    position: absolute; top: 8px; right: 8px; z-index: 2;
+    width: 26px; height: 26px; border-radius: 6px; border: none; cursor: pointer;
+    background: rgba(20, 22, 30, .55); color: #ffd7dd; font-size: 13px;
+    display: none; align-items: center; justify-content: center;
+  }
+  .tpl-card:hover .tpl-del { display: inline-flex; }
+  .tpl-del:hover { background: var(--red); color: #fff; }
+
+  .tpl-big {
+    display: flex; align-items: center; justify-content: center; min-height: 240px;
+    background: repeating-conic-gradient(var(--bg-elevated) 0% 25%, var(--bg-panel) 0% 50%) 0 0 / 20px 20px;
+    border-radius: var(--radius-sm); overflow: hidden; margin-bottom: 14px;
+  }
+  .tpl-big canvas { max-width: 100%; border-radius: 6px; }
+  .meta-line { font-size: 12.5px; color: var(--text-soft); display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+</style>
+</head>
+<body>
+<div class="wb-page">
+  <main class="wb-main">
+    <div class="wb-container">
+      <div class="wb-page-head">
+        <div>
+          <div class="wb-page-title">🧩 模板库</div>
+          <div class="wb-page-sub">内置流程图 / 思维导图 / 规划 / 分析模板, 也可把自己的白板保存为模板</div>
+        </div>
+        <span class="spacer"></span>
+        <button class="btn primary" id="btn-save-tpl">💾 保存当前白板为模板</button>
+      </div>
+
+      <div class="tpl-toolbar">
+        <input class="input" id="tpl-search" placeholder="搜索模板名称 / 描述…" style="width:240px">
+        <div class="cat-chips" id="cat-chips"></div>
+      </div>
+
+      <div class="grid cols-3" id="tpl-grid"></div>
+      <div id="tpl-empty"></div>
+    </div>
+  </main>
+</div>
+
+<script type="module">
+import { Api } from './js/api.js';
+import { BoardEngine } from './js/engine.js';
+import {
+  confirmDialog, debounce, escapeHtml, fmtTime, getMe, initPage, modal, toast,
+} from './js/ui.js';
+
+const me = await initPage('templates', { gate: true, title: '模板库' });
+if (!getMe()) throw new Error('未登录');
+
+/* ---------------------------------------------------------------- 状态 */
+let allTemplates = [];
+let categories = [];
+let activeCat = '全部';
+let query = '';
+const shapesCache = new Map();     // template_id → shapes(预览只拉一次)
+
+const $ = (id) => document.getElementById(id);
+
+/* ---------------------------------------------------------------- 加载与渲染 */
+async function load() {
+  try {
+    const data = await Api.templates.list();
+    allTemplates = data.templates || [];
+    categories = ['全部', ...(data.categories || [])];
+    renderChips();
+    renderGrid();
+  } catch (err) {
+    toast(err.message || '加载模板失败', 'error');
+  }
+}
+
+function renderChips() {
+  const host = $('cat-chips');
+  host.innerHTML = categories.map((c) => `
+    <span class="cat-chip ${c === activeCat ? 'active' : ''}" data-cat="${escapeHtml(c)}">${escapeHtml(c)}</span>`).join('');
+  host.querySelectorAll('.cat-chip').forEach((el) => {
+    el.onclick = () => { activeCat = el.dataset.cat; renderChips(); renderGrid(); };
+  });
+}
+
+function filtered() {
+  const q = query.toLowerCase();
+  return allTemplates.filter((t) => {
+    if (activeCat !== '全部' && t.category !== activeCat) return false;
+    if (q && !`${t.name} ${t.description || ''} ${t.category}`.toLowerCase().includes(q)) return false;
+    return true;
+  });
+}
+
+function modeBadge(t) {
+  return t.mode === 'mindmap'
+    ? '<span class="badge purple">🧠 思维导图</span>'
+    : '<span class="badge accent">🎨 白板</span>';
+}
+
+function renderGrid() {
+  const grid = $('tpl-grid');
+  const list = filtered();
+  grid.innerHTML = list.map((t) => `
+    <div class="card hoverable tpl-card" data-id="${escapeHtml(t.id)}">
+      ${t.builtin ? '' : '<button class="tpl-del" title="删除模板">🗑</button>'}
+      <div class="tpl-thumb"><span class="loading">预览加载中…</span><canvas class="hidden"></canvas></div>
+      <div class="tpl-info">
+        <div class="name-row"><span class="name" title="${escapeHtml(t.name)}">${escapeHtml(t.name)}</span></div>
+        <div class="badges">
+          <span class="badge">${escapeHtml(t.category || '其他')}</span>
+          ${modeBadge(t)}
+          ${t.builtin ? '<span class="badge green">内置</span>'
+            : `<span class="badge orange">自定义${t.owner ? ' @' + escapeHtml(t.owner) : ''}</span>`}
+        </div>
+        <div class="desc">${escapeHtml(t.description || '')}</div>
+      </div>
+    </div>`).join('');
+  $('tpl-empty').innerHTML = list.length ? '' : `
+    <div class="empty-state">
+      <div class="icon">🧩</div>
+      <div class="title">没有匹配的模板</div>
+      <div>换个关键词, 或把你自己的白板保存为模板</div>
+    </div>`;
+
+  grid.querySelectorAll('.tpl-card').forEach((card) => {
+    const id = card.dataset.id;
+    card.onclick = (e) => {
+      if (e.target.closest('.tpl-del')) return;
+      openDetail(id);
+    };
+    card.querySelector('.tpl-del')?.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const t = allTemplates.find((x) => x.id === id);
+      if (!await confirmDialog(`删除模板「${t?.name || id}」?`, { title: '删除模板', danger: true })) return;
+      try {
+        await Api.templates.remove(id);
+        toast('模板已删除', 'success');
+        shapesCache.delete(id);
+        load();
+      } catch (err) { toast(err.message || '删除失败', 'error'); }
+    });
+    observer.observe(card.querySelector('.tpl-thumb'));
+  });
+}
+
+/* ---------------------------------------------------------------- 缩略图懒加载 */
+async function fetchShapes(id) {
+  if (shapesCache.has(id)) return shapesCache.get(id);
+  const data = await Api.templates.shapes(id);
+  shapesCache.set(id, data.shapes || []);
+  return shapesCache.get(id);
+}
+
+function paintThumb(canvas, shapes, maxW, maxH, padding = 16) {
+  BoardEngine.renderStatic(canvas, shapes, { maxW, maxH, padding, mindLinks: true, background: '#fbfbf9' });
+  // renderStatic 会写内联尺寸; 卡片内统一由 CSS 控制显示大小
+  canvas.style.width = '100%';
+  canvas.style.height = '100%';
+  canvas.style.objectFit = 'contain';
+}
+
+const observer = new IntersectionObserver(async (entries) => {
+  for (const entry of entries) {
+    if (!entry.isIntersecting) continue;
+    observer.unobserve(entry.target);
+    const card = entry.target.closest('.tpl-card');
+    const id = card?.dataset.id;
+    if (!id) continue;
+    const canvas = entry.target.querySelector('canvas');
+    const loading = entry.target.querySelector('.loading');
+    try {
+      const shapes = await fetchShapes(id);
+      paintThumb(canvas, shapes, 280, 160);
+      canvas.classList.remove('hidden');
+      loading?.remove();
+    } catch {
+      if (loading) loading.textContent = '预览不可用';
+    }
+  }
+}, { rootMargin: '120px' });
+
+/* ---------------------------------------------------------------- 详情弹窗 */
+async function openDetail(id) {
+  const t = allTemplates.find((x) => x.id === id);
+  if (!t) return;
+  const m = modal({
+    title: t.name,
+    width: 'wide',
+    body: `
+      <div class="tpl-big"><canvas data-preview></canvas></div>
+      <div class="meta-line">
+        <span class="badge">${escapeHtml(t.category || '其他')}</span>
+        ${modeBadge(t)}
+        ${t.builtin ? '<span class="badge green">内置模板</span>'
+          : `<span class="badge orange">自定义${t.owner ? ' · 创建者 @' + escapeHtml(t.owner) : ''}</span>`}
+        ${t.created_at ? `<span class="muted">保存于 ${fmtTime(t.created_at)}</span>` : ''}
+      </div>
+      ${t.description ? `<div class="small soft mb16">${escapeHtml(t.description)}</div>` : ''}
+      <div class="field">
+        <label>新白板名称</label>
+        <input class="input" data-newname value="${escapeHtml(t.name)}" maxlength="80">
+      </div>`,
+    footer: `<button class="btn" data-close>关闭</button>
+             <button class="btn primary" data-create>🚀 用此模板创建白板</button>`,
+    onMount(el, close) {
+      el.querySelector('[data-close]').onclick = close;
+      const canvas = el.querySelector('[data-preview]');
+      fetchShapes(t.id)
+        .then((shapes) => {
+          BoardEngine.renderStatic(canvas, shapes, { maxW: 640, maxH: 340, padding: 20, mindLinks: true });
+          canvas.style.width = '';
+          canvas.style.height = '';
+        })
+        .catch(() => { canvas.remove(); });
+      el.querySelector('[data-create]').onclick = async () => {
+        const name = el.querySelector('[data-newname]').value.trim() || t.name;
+        try {
+          const data = await Api.boards.create({ name, mode: t.mode || 'board', template_id: t.id });
+          close();
+          toast('白板已创建, 正在打开…', 'success');
+          const page = data.board.mode === 'mindmap' ? 'mindmap' : 'editor';
+          location.href = `/${page}.html?board=${encodeURIComponent(data.board.id)}`;
+        } catch (err) { toast(err.message || '创建失败', 'error'); }
+      };
+    },
+  });
+  return m;
+}
+
+/* ---------------------------------------------------------------- 保存为模板 */
+async function openSaveDialog() {
+  let boards = [];
+  try {
+    boards = (await Api.boards.list({ sort: 'updated' })).boards || [];
+  } catch (err) {
+    toast(err.message || '获取白板列表失败', 'error');
+    return;
+  }
+  if (!boards.length) { toast('还没有可保存的白板', 'warn'); return; }
+  const preselect = new URLSearchParams(location.search).get('board') || boards[0].id;
+  modal({
+    title: '保存白板为模板',
+    body: `
+      <div class="field"><label>来源白板</label>
+        <select class="select" data-board>
+          ${boards.map((b) => `<option value="${b.id}" ${b.id === preselect ? 'selected' : ''}>${escapeHtml(b.name)}${b.mode === 'mindmap' ? ' 🧠' : ' 🎨'}</option>`).join('')}
+        </select></div>
+      <div class="field"><label>模板名称</label>
+        <input class="input" data-name placeholder="例如: 迭代排期板" maxlength="60"></div>
+      <div class="field"><label>分类</label>
+        <input class="input" data-cat list="cat-list" placeholder="选择或输入新分类" maxlength="20">
+        <datalist id="cat-list">${categories.filter((c) => c !== '全部')
+          .map((c) => `<option value="${escapeHtml(c)}">`).join('')}</datalist></div>
+      <div class="field"><label>描述(可选)</label>
+        <textarea class="textarea" data-desc rows="2" maxlength="200" placeholder="一句话说明模板用途"></textarea></div>
+      <div class="small muted">提示: 每个模板最多保存 400 个图形, 超出的部分会被截断。</div>`,
+    footer: `<button class="btn" data-close>取消</button><button class="btn primary" data-ok>保存模板</button>`,
+    onMount(el, close) {
+      el.querySelector('[data-close]').onclick = close;
+      const boardSel = el.querySelector('[data-board]');
+      const nameInput = el.querySelector('[data-name]');
+      boardSel.onchange = () => {
+        if (!nameInput.value.trim()) {
+          const b = boards.find((x) => x.id === boardSel.value);
+          nameInput.placeholder = b ? `${b.name} 模板` : '';
+        }
+      };
+      el.querySelector('[data-ok]').onclick = async () => {
+        const name = nameInput.value.trim()
+          || `${boards.find((b) => b.id === boardSel.value)?.name || '白板'} 模板`;
+        const payload = {
+          name,
+          category: el.querySelector('[data-cat]').value.trim() || '自定义',
+          description: el.querySelector('[data-desc]').value.trim(),
+          from_board: boardSel.value,
+        };
+        try {
+          await Api.templates.create(payload);
+          close();
+          toast('模板已保存', 'success');
+          load();
+        } catch (err) { toast(err.message || '保存失败', 'error'); }
+      };
+      setTimeout(() => nameInput.focus(), 40);
+    },
+  });
+}
+
+/* ---------------------------------------------------------------- 事件 */
+$('tpl-search').addEventListener('input', debounce((e) => {
+  query = e.target.value.trim();
+  renderGrid();
+}, 220));
+$('btn-save-tpl').onclick = openSaveDialog;
+
+/* ---------------------------------------------------------------- 启动 */
+load();
+</script>
+</body>
+</html>

@@ -1,0 +1,1 @@
+{"op_id":"seed-bob:13","site":"seed-bob","lam":13,"ts":1790310487988,"type":"set_props","base_rev":0,"id":"sh_note_b2","props":{"text":"回滚预案\n监控: grafana/v2-rollout\n负责人: @bob"},"rev":38,"by":"bob"}

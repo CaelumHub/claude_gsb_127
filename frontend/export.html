@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>导出 · CoBoard 协同白板</title>
+<link rel="stylesheet" href="/css/common.css">
+<style>
+  .export-layout { display: flex; gap: 16px; align-items: flex-start; }
+  .export-left { width: 370px; flex: none; display: flex; flex-direction: column; gap: 14px; }
+  .export-right { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+  @media (max-width: 980px) { .export-layout { flex-direction: column; } .export-left { width: 100%; } }
+
+  .fmt-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .fmt-card {
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    padding: 10px 12px; cursor: pointer; background: var(--bg-soft);
+    transition: border-color .15s, background .15s; user-select: none;
+  }
+  .fmt-card:hover { border-color: var(--text-mute); }
+  .fmt-card.active { border-color: var(--accent); background: var(--accent-soft); }
+  .fmt-card .ico { font-size: 18px; }
+  .fmt-card .t { font-weight: 700; font-size: 13px; margin-top: 2px; }
+  .fmt-card .d { font-size: 11px; color: var(--text-mute); margin-top: 1px; }
+
+  .opt-section { display: none; }
+  .opt-section.show { display: block; }
+  .opt-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+  .opt-row > label { font-size: 12.5px; color: var(--text-soft); width: 64px; flex: none; }
+
+  .rev-strip { position: relative; height: 18px; margin: 6px 2px 2px; }
+  .rev-strip .snap-mark {
+    position: absolute; top: 2px; width: 0; height: 0; transform: translateX(-5px);
+    border-left: 5px solid transparent; border-right: 5px solid transparent;
+    border-top: 8px solid var(--green); cursor: pointer;
+  }
+  .rev-strip .snap-mark:hover { border-top-color: var(--accent); }
+  input[type="range"].rev-slider { width: 100%; }
+
+  .preview-body {
+    min-height: 300px; display: flex; align-items: center; justify-content: center;
+    background: repeating-conic-gradient(var(--bg-elevated) 0% 25%, var(--bg-panel) 0% 50%) 0 0 / 22px 22px;
+    border-radius: var(--radius-sm); padding: 14px; overflow: auto;
+  }
+  #preview-canvas { max-width: 100%; max-height: 430px; border-radius: 6px; box-shadow: var(--shadow); }
+  #preview-img { max-width: 100%; max-height: 430px; border-radius: 6px; box-shadow: var(--shadow); background: #fff; }
+  .preview-info { text-align: center; color: var(--text-soft); padding: 30px; max-width: 480px; }
+  .preview-info .ico { font-size: 40px; margin-bottom: 8px; }
+  .file-chip { font-family: var(--mono); font-size: 12px; color: var(--accent-text); }
+
+  .hist-item { display: flex; align-items: center; gap: 10px; padding: 8px 4px; border-bottom: 1px solid var(--border-soft); font-size: 12.5px; }
+  .hist-item:last-child { border-bottom: none; }
+</style>
+</head>
+<body>
+<div class="wb-page">
+  <main class="wb-main">
+    <div class="wb-container">
+      <div class="wb-page-head">
+        <div>
+          <div class="wb-page-title">📤 导出</div>
+          <div class="wb-page-sub">把白板导出为 PNG / SVG / JSON / 操作日志, 支持导出任意历史版本(基于服务端快照折叠)</div>
+        </div>
+        <span class="spacer"></span>
+        <button class="btn" id="btn-chat">💬 导出聊天记录</button>
+        <button class="btn" id="btn-report">📊 导出概览报告</button>
+      </div>
+
+      <div class="export-layout">
+        <!-- 左: 配置 -->
+        <div class="export-left">
+          <div class="panel">
+            <div class="panel-head">选择白板</div>
+            <div class="panel-body">
+              <select class="select" id="board-select"><option value="">加载中…</option></select>
+              <div class="small muted mt8" id="board-meta">—</div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">导出格式</div>
+            <div class="panel-body">
+              <div class="fmt-cards" id="fmt-cards">
+                <div class="fmt-card active" data-fmt="png"><div class="ico">🖼</div><div class="t">PNG 图片</div><div class="d">前端渲染 · 可选透明底</div></div>
+                <div class="fmt-card" data-fmt="svg"><div class="ico">📐</div><div class="t">SVG 矢量</div><div class="d">服务端渲染 · 无限缩放</div></div>
+                <div class="fmt-card" data-fmt="json"><div class="ico">🧾</div><div class="t">JSON 文档</div><div class="d">白板完整状态</div></div>
+                <div class="fmt-card" data-fmt="ops"><div class="ico">🎞</div><div class="t">操作日志</div><div class="d">NDJSON · 可回放审计</div></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">导出范围</div>
+            <div class="panel-body">
+              <div class="opt-row">
+                <label class="checkbox-row" style="width:auto"><input type="radio" name="scope" value="current" checked> 当前状态</label>
+                <label class="checkbox-row" style="width:auto"><input type="radio" name="scope" value="history"> 历史版本</label>
+              </div>
+              <div id="hist-opts" class="hidden">
+                <div class="small muted">拖动选择要导出的修订号(rev), 绿色三角 = 服务端快照位置(跳转最快)</div>
+                <input type="range" class="rev-slider" id="rev-slider" min="0" max="0" value="0">
+                <div class="rev-strip" id="rev-strip"></div>
+                <div class="row small mt8">
+                  <span>rev <b class="mono" id="rev-label">0</b></span>
+                  <span class="spacer"></span>
+                  <span class="muted" id="rev-time"></span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">选项</div>
+            <div class="panel-body">
+              <div class="opt-section show" data-for="png">
+                <div class="opt-row"><label>缩放</label>
+                  <div class="btn-group" id="scale-group">
+                    <button class="btn sm active" data-scale="1">1x</button>
+                    <button class="btn sm" data-scale="2">2x</button>
+                    <button class="btn sm" data-scale="3">3x</button>
+                  </div>
+                </div>
+                <div class="opt-row"><label>背景</label>
+                  <select class="select" id="png-bg" style="flex:1">
+                    <option value="#fbfbf9">纸白</option><option value="#ffffff">纯白</option>
+                    <option value="transparent">透明</option><option value="#1e222d">深色</option>
+                  </select>
+                </div>
+                <div class="opt-row"><label>点阵网格</label>
+                  <label class="switch"><input type="checkbox" id="png-grid"><span class="slider"></span></label>
+                </div>
+              </div>
+              <div class="opt-section" data-for="svg">
+                <div class="opt-row"><label>背景</label>
+                  <select class="select" id="svg-bg" style="flex:1">
+                    <option value="#ffffff">纯白</option><option value="#fbfbf9">纸白</option>
+                    <option value="transparent">透明</option><option value="#1e222d">深色</option>
+                  </select>
+                </div>
+                <div class="opt-row"><label>点阵网格</label>
+                  <label class="switch"><input type="checkbox" id="svg-grid"><span class="slider"></span></label>
+                </div>
+                <div class="small muted">SVG 由服务端渲染器生成, 连线锚点/文本折行与画布一致。</div>
+              </div>
+              <div class="opt-section" data-for="json">
+                <div class="small muted">JSON 文档包含白板元信息与全部图形(含 CRDT 字段时钟), 可用于迁移或二次导入。</div>
+              </div>
+              <div class="opt-section" data-for="ops">
+                <div class="small muted">操作日志为 NDJSON(每行一个操作, 含 rev/site/lamport), 范围 = rev 0 到所选修订号, 可用于审计或重建历史。</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 右: 预览 + 下载 + 历史 -->
+        <div class="export-right">
+          <div class="panel">
+            <div class="panel-head">
+              <span>预览</span>
+              <span class="spacer"></span>
+              <span class="file-chip" id="file-name">—</span>
+            </div>
+            <div class="panel-body">
+              <div class="preview-body">
+                <canvas id="preview-canvas" class="hidden"></canvas>
+                <img id="preview-img" class="hidden" alt="预览">
+                <div id="preview-info" class="preview-info hidden"></div>
+              </div>
+              <!-- 预览取舍说明:
+                   当前状态 + PNG → 直接用 BoardEngine.renderStatic 在本地渲染(所见即所得);
+                   历史版本 / SVG → 本地没有旧 rev 的图形数据, 而 /history/replay 只回
+                   快照+操作(需要前端逐条折叠才能还原画面), 成本高; 因此改为直接请求
+                   服务端 /export?format=svg&rev=N —— 服务端从最近快照折叠出该时刻状态
+                   并渲染 SVG, 前端塞进 <img> 展示。PNG 历史导出同样先取 SVG 再栅格化。 -->
+              <div class="row mt16">
+                <span class="small muted" id="preview-note"></span>
+                <span class="spacer"></span>
+                <button class="btn primary lg" id="btn-download">⬇ 下载</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">导出历史<span class="spacer"></span>
+              <button class="btn ghost sm" id="btn-clear-hist">清空</button></div>
+            <div class="panel-body" id="hist-list" style="padding-top:4px"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script type="module">
+import { Api } from './js/api.js';
+import { BoardEngine } from './js/engine.js';
+import { debounce, escapeHtml, fmtTime, getMe, initPage, modal, toast } from './js/ui.js';
+
+const me = await initPage('export', { gate: true, title: '导出' });
+if (!getMe()) throw new Error('未登录');
+
+/* ---------------------------------------------------------------- 状态 */
+const state = {
+  boards: [],
+  boardId: '',
+  board: null,            // state 接口返回的 {board, rev, shapes...}
+  histIndex: null,        // /history/index 结果
+  format: 'png',
+  scope: 'current',
+  histRev: 0,
+  pngScale: 1,
+  pngBg: '#fbfbf9',
+  pngGrid: false,
+  svgBg: '#ffffff',
+  svgGrid: false,
+};
+const LS_BOARD = 'wb_export_board';
+const LS_HIST = 'wb_export_history';
+
+const $ = (id) => document.getElementById(id);
+
+/* ---------------------------------------------------------------- 白板加载 */
+async function loadBoards() {
+  const data = await Api.boards.list({ sort: 'updated' });
+  state.boards = data.boards || [];
+  const sel = $('board-select');
+  sel.innerHTML = state.boards.length
+    ? state.boards.map((b) => `<option value="${b.id}">${escapeHtml(b.name)}${b.mode === 'mindmap' ? ' 🧠' : ' 🎨'}</option>`).join('')
+    : '<option value="">暂无白板, 请先创建</option>';
+  const wanted = new URLSearchParams(location.search).get('board')
+    || localStorage.getItem(LS_BOARD) || state.boards[0]?.id;
+  if (state.boards.some((b) => b.id === wanted)) sel.value = wanted;
+  await selectBoard(sel.value);
+}
+
+async function selectBoard(id) {
+  state.boardId = id;
+  if (!id) { state.board = null; state.histIndex = null; updateAll(); return; }
+  localStorage.setItem(LS_BOARD, id);
+  try {
+    const [st, idx] = await Promise.all([Api.boards.state(id), Api.history.index(id)]);
+    state.board = st;
+    state.histIndex = idx;
+    state.histRev = idx.head_rev || 0;
+    const slider = $('rev-slider');
+    slider.max = idx.head_rev || 0;
+    slider.value = state.histRev;
+    renderSnapMarks();
+    updateAll();
+  } catch (err) {
+    toast(err.message || '加载白板失败', 'error');
+  }
+}
+
+function renderSnapMarks() {
+  const strip = $('rev-strip');
+  const head = Math.max(1, state.histIndex?.head_rev || 1);
+  strip.innerHTML = (state.histIndex?.snapshots || [])
+    .map((s) => `<span class="snap-mark" style="left:${(s.rev / head) * 100}%" data-rev="${s.rev}" title="快照 @ rev ${s.rev}"></span>`)
+    .join('');
+  strip.querySelectorAll('.snap-mark').forEach((el) => {
+    el.onclick = () => {
+      state.histRev = Number(el.dataset.rev);
+      $('rev-slider').value = state.histRev;
+      onRevChange();
+    };
+  });
+}
+
+function currentRev() {
+  return state.scope === 'history' ? state.histRev : (state.board?.rev ?? 0);
+}
+
+function safeName(name) {
+  return String(name || 'board').replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 60);
+}
+
+function fileName(ext) {
+  return `${safeName(state.board?.board?.name)}-r${currentRev()}.${ext}`;
+}
+
+/* ---------------------------------------------------------------- 渲染控制 */
+function updateAll() {
+  // 白板信息
+  const b = state.board?.board;
+  $('board-meta').innerHTML = b
+    ? `${b.mode === 'mindmap' ? '🧠 思维导图' : '🎨 白板'} · 所有者 @${escapeHtml(b.owner || '?')} · 当前 rev <b class="mono">${state.board.rev}</b> · ${state.board.shapes?.length ?? 0} 图形`
+    : '—';
+  // 格式选项区
+  document.querySelectorAll('.opt-section').forEach((el) => {
+    el.classList.toggle('show', el.dataset.for === state.format);
+  });
+  document.querySelectorAll('.fmt-card').forEach((el) => {
+    el.classList.toggle('active', el.dataset.fmt === state.format);
+  });
+  $('hist-opts').classList.toggle('hidden', state.scope !== 'history');
+  $('rev-label').textContent = state.histRev;
+  const shardOp = findOpNearRev(state.histRev);
+  $('rev-time').textContent = shardOp ? `≈ ${fmtTime(shardOp, true)}` : '';
+  $('file-name').textContent = state.boardId
+    ? fileName({ png: 'png', svg: 'svg', json: 'json', ops: 'ndjson' }[state.format])
+    : '—';
+  const notes = {
+    png: state.scope === 'history' ? '历史版本 PNG: 服务端 SVG → 前端栅格化' : '本地 Canvas 渲染, 与画布所见一致',
+    svg: '服务端矢量渲染', json: '白板完整状态文档', ops: 'NDJSON 操作流水',
+  };
+  $('preview-note').textContent = notes[state.format];
+  updatePreview();
+}
+
+function findOpNearRev(rev) {
+  // 用分片索引估计该 rev 的时间
+  for (const s of (state.histIndex?.shards || []).slice().reverse()) {
+    if (s.first_rev != null && s.last_rev != null && rev >= s.first_rev && rev <= s.last_rev) return s.last_ts;
+    if (s.last_rev != null && rev > s.last_rev) return s.last_ts;
+  }
+  return null;
+}
+
+const updatePreview = debounce(async () => {
+  const canvas = $('preview-canvas');
+  const img = $('preview-img');
+  const info = $('preview-info');
+  const show = (el) => { [canvas, img, info].forEach((x) => x.classList.toggle('hidden', x !== el)); };
+  if (!state.boardId || !state.board) { show(info); info.innerHTML = '<div class="ico">📄</div>请先在左侧选择白板'; return; }
+
+  const useSvg = state.scope === 'history' || state.format === 'svg';
+  if ((state.format === 'png' && !useSvg)) {
+    show(canvas);
+    BoardEngine.renderStatic(canvas, state.board.shapes || [], {
+      maxW: 640, maxH: 420, background: state.pngBg, grid: state.pngGrid, mindLinks: true, padding: 28,
+    });
+    canvas.style.width = ''; canvas.style.height = '';
+    return;
+  }
+  if (useSvg && (state.format === 'png' || state.format === 'svg')) {
+    show(img);
+    img.src = '';
+    try {
+      const url = Api.boards.exportUrl(state.boardId, 'svg', {
+        rev: state.scope === 'history' ? state.histRev : undefined,
+        background: state.format === 'svg' ? state.svgBg : state.pngBg,
+        grid: state.format === 'svg' ? state.svgGrid : state.pngGrid,
+      });
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const blob = await resp.blob();
+      img.src = URL.createObjectURL(blob);
+      img.onload = () => URL.revokeObjectURL(img.src);
+    } catch (err) {
+      show(info);
+      info.innerHTML = `<div class="ico">⚠️</div>预览生成失败: ${escapeHtml(err.message)}`;
+    }
+    return;
+  }
+  // json / ops: 展示元信息
+  show(info);
+  const idx = state.histIndex;
+  info.innerHTML = `
+    <div class="ico">${state.format === 'json' ? '🧾' : '🎞'}</div>
+    <div class="bold mb8">${state.format === 'json' ? '白板状态文档' : '操作日志(NDJSON)'}</div>
+    <div class="small">
+      修订号 rev ${currentRev()} · 操作总数 ${idx?.stats?.total ?? '—'} ·
+      日志分片 ${idx?.stats?.shards ?? '—'} 个 · 快照 ${idx?.snapshots?.length ?? '—'} 份<br>
+      图形 ${state.board.shapes?.length ?? 0} 个 · 日志体积 ${((idx?.storage?.ops_bytes || 0) / 1024).toFixed(1)} KB
+    </div>
+    <div class="small muted mt8">点击「下载」获取文件</div>`;
+}, 350);
+
+/* ---------------------------------------------------------------- 下载 */
+async function svgToPngBlob(svgText, scale) {
+  const url = URL.createObjectURL(new Blob([svgText], { type: 'image/svg+xml' }));
+  try {
+    const img = new Image();
+    await new Promise((res, rej) => { img.onload = res; img.onerror = () => rej(new Error('SVG 解析失败')); img.src = url; });
+    const w = img.naturalWidth || 800; const h = img.naturalHeight || 600;
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(w * scale));
+    c.height = Math.max(1, Math.round(h * scale));
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    return await new Promise((res) => c.toBlob(res, 'image/png'));
+  } finally { URL.revokeObjectURL(url); }
+}
+
+function saveBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+async function download() {
+  if (!state.boardId || !state.board) { toast('请先选择白板', 'warn'); return; }
+  const rev = state.scope === 'history' ? state.histRev : undefined;
+  try {
+    if (state.format === 'png') {
+      let blob;
+      if (state.scope === 'history') {
+        const resp = await fetch(Api.boards.exportUrl(state.boardId, 'svg', {
+          rev, background: state.pngBg, grid: state.pngGrid,
+        }));
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        blob = await svgToPngBlob(await resp.text(), state.pngScale);
+      } else {
+        const c = document.createElement('canvas');
+        BoardEngine.renderStatic(c, state.board.shapes || [], {
+          scale: state.pngScale, background: state.pngBg, grid: state.pngGrid, mindLinks: true, padding: 30,
+        });
+        blob = await new Promise((res) => c.toBlob(res, 'image/png'));
+      }
+      if (!blob) throw new Error('PNG 生成失败');
+      saveBlob(blob, fileName('png'));
+    } else {
+      Api.download(Api.boards.exportUrl(state.boardId, state.format, {
+        rev,
+        background: state.format === 'svg' ? state.svgBg : undefined,
+        grid: state.format === 'svg' ? state.svgGrid : undefined,
+      }), fileName(state.format === 'ops' ? 'ndjson' : state.format));
+    }
+    pushHist({ ts: Date.now(), board_id: state.boardId, board_name: state.board.board?.name, format: state.format, rev: currentRev() });
+    toast('已开始下载', 'success');
+  } catch (err) {
+    toast(err.message || '导出失败', 'error');
+  }
+}
+
+/* ---------------------------------------------------------------- 聊天/报告导出 */
+async function exportChat() {
+  if (!state.boardId) { toast('请先选择白板', 'warn'); return; }
+  try {
+    let before = null; const all = [];
+    for (let i = 0; i < 60; i++) {
+      const data = await Api.chat.list(state.boardId, { limit: 500, before });
+      all.unshift(...(data.messages || []));
+      if (!data.has_more || !data.messages?.length) break;
+      before = data.messages[0].ts;
+    }
+    const payload = {
+      format: 'coboard-chat-export', board: { id: state.boardId, name: state.board.board?.name },
+      exported_at: Date.now(), exported_by: getMe()?.username, count: all.length, messages: all,
+    };
+    saveBlob(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }),
+      `${safeName(state.board.board?.name)}-chat.json`);
+    toast(`已导出 ${all.length} 条消息`, 'success');
+  } catch (err) { toast(err.message || '聊天导出失败', 'error'); }
+}
+
+async function exportReport() {
+  if (!state.boardId) { toast('请先选择白板', 'warn'); return; }
+  try {
+    const idx = await Api.history.index(state.boardId);
+    const report = {
+      format: 'coboard-export-report',
+      generated_at: Date.now(),
+      generated_by: getMe()?.username,
+      board: { id: state.boardId, name: state.board?.board?.name, mode: state.board?.board?.mode, owner: state.board?.board?.owner },
+      head_rev: idx.head_rev,
+      ops_total: idx.stats?.total ?? null,
+      ops_by_type: idx.stats?.by_type ?? {},
+      ops_by_user: idx.stats?.by_user ?? {},
+      log_shards: idx.shards?.length ?? 0,
+      snapshots: idx.snapshots?.length ?? 0,
+      storage: idx.storage ?? {},
+    };
+    saveBlob(new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' }),
+      `${safeName(state.board?.board?.name)}-report.json`);
+    toast('报告已导出', 'success');
+  } catch (err) { toast(err.message || '报告导出失败', 'error'); }
+}
+
+/* ---------------------------------------------------------------- 导出历史 */
+function pushHist(entry) {
+  let list = [];
+  try { list = JSON.parse(localStorage.getItem(LS_HIST) || '[]'); } catch { list = []; }
+  list.unshift(entry);
+  localStorage.setItem(LS_HIST, JSON.stringify(list.slice(0, 20)));
+  renderHist();
+}
+
+function renderHist() {
+  let list = [];
+  try { list = JSON.parse(localStorage.getItem(LS_HIST) || '[]'); } catch { list = []; }
+  const host = $('hist-list');
+  if (!list.length) {
+    host.innerHTML = '<div class="empty-state" style="padding:22px"><div class="title small">暂无导出记录</div></div>';
+    return;
+  }
+  const fmtIco = { png: '🖼', svg: '📐', json: '🧾', ops: '🎞' };
+  host.innerHTML = list.map((e, i) => `
+    <div class="hist-item">
+      <span>${fmtIco[e.format] || '📄'}</span>
+      <span class="bold nowrap">${escapeHtml(e.board_name || e.board_id)}</span>
+      <span class="badge">${(e.format || '').toUpperCase()}</span>
+      <span class="mono muted">rev ${e.rev ?? '?'}</span>
+      <span class="muted small">${fmtTime(e.ts)}</span>
+      <span class="spacer"></span>
+      <button class="btn sm ghost" data-again="${i}">再次下载</button>
+    </div>`).join('');
+  host.querySelectorAll('[data-again]').forEach((btn) => {
+    btn.onclick = () => {
+      const e = list[Number(btn.dataset.again)];
+      if (!e) return;
+      if (e.format === 'png') { toast('PNG 为本地渲染, 请在预览中重新下载', 'warn'); return; }
+      Api.download(Api.boards.exportUrl(e.board_id, e.format, { rev: e.rev != null ? e.rev : undefined }),
+        `${safeName(e.board_name)}-r${e.rev}.${e.format === 'ops' ? 'ndjson' : e.format}`);
+    };
+  });
+}
+
+/* ---------------------------------------------------------------- 事件绑定 */
+$('board-select').onchange = (e) => selectBoard(e.target.value);
+
+$('fmt-cards').querySelectorAll('.fmt-card').forEach((el) => {
+  el.onclick = () => { state.format = el.dataset.fmt; updateAll(); };
+});
+
+document.querySelectorAll('input[name="scope"]').forEach((el) => {
+  el.onchange = () => {
+    state.scope = el.value;
+    if (state.scope === 'history' && state.histIndex) state.histRev = state.histIndex.head_rev || 0;
+    updateAll();
+  };
+});
+
+function onRevChange() {
+  $('rev-label').textContent = state.histRev;
+  $('rev-time').textContent = `≈ ${fmtTime(findOpNearRev(state.histRev), true)}`;
+  $('file-name').textContent = fileName({ png: 'png', svg: 'svg', json: 'json', ops: 'ndjson' }[state.format]);
+  updatePreview();
+}
+$('rev-slider').oninput = (e) => { state.histRev = Number(e.target.value); onRevChange(); };
+
+$('scale-group').querySelectorAll('[data-scale]').forEach((el) => {
+  el.onclick = () => {
+    state.pngScale = Number(el.dataset.scale);
+    $('scale-group').querySelectorAll('.btn').forEach((b) => b.classList.toggle('active', b === el));
+  };
+});
+$('png-bg').onchange = (e) => { state.pngBg = e.target.value; updatePreview(); };
+$('png-grid').onchange = (e) => { state.pngGrid = e.target.checked; updatePreview(); };
+$('svg-bg').onchange = (e) => { state.svgBg = e.target.value; updatePreview(); };
+$('svg-grid').onchange = (e) => { state.svgGrid = e.target.checked; updatePreview(); };
+
+$('btn-download').onclick = download;
+$('btn-chat').onclick = exportChat;
+$('btn-report').onclick = exportReport;
+$('btn-clear-hist').onclick = () => { localStorage.removeItem(LS_HIST); renderHist(); };
+
+/* ---------------------------------------------------------------- 启动 */
+renderHist();
+try {
+  await loadBoards();
+} catch (err) {
+  toast(err.message || '加载失败', 'error');
+}
+</script>
+</body>
+</html>

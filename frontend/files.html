@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>文件管理 · CoBoard 协同白板</title>
+<link rel="stylesheet" href="/css/common.css">
+<style>
+  /* 快速切换条 */
+  .switch-bar { display: flex; align-items: center; gap: 8px; overflow-x: auto; padding: 4px 2px 10px; }
+  .switch-chip {
+    flex: none; display: inline-flex; align-items: center; gap: 7px;
+    padding: 6px 14px; border-radius: 20px; cursor: pointer;
+    background: var(--bg-panel); border: 1px solid var(--border);
+    color: var(--text-soft); font-size: 13px; white-space: nowrap;
+    transition: all .15s; text-decoration: none;
+  }
+  .switch-chip:hover { border-color: var(--accent); color: var(--text); text-decoration: none; }
+  .switch-chip.current { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-text); font-weight: 600; }
+
+  /* 工具栏 */
+  .toolbar {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 12px 14px; margin-bottom: 14px;
+    background: var(--bg-panel); border: 1px solid var(--border); border-radius: var(--radius);
+  }
+  .toolbar .input, .toolbar .select { width: auto; }
+  .toolbar #q { width: 200px; }
+
+  /* 批量操作条 */
+  .bulk-bar {
+    display: none; align-items: center; gap: 10px;
+    padding: 9px 14px; margin-bottom: 12px; border-radius: var(--radius);
+    background: var(--accent-soft); border: 1px solid var(--accent);
+    font-size: 13px; color: var(--accent-text);
+  }
+  .bulk-bar.show { display: flex; }
+
+  /* 表格细节 */
+  .wb-table td.name-cell { max-width: 260px; }
+  .name-link { font-weight: 600; color: var(--text); cursor: pointer; }
+  .name-link:hover { color: var(--accent-text); }
+  .rename-ico { opacity: 0; margin-left: 4px; cursor: pointer; font-size: 12px; color: var(--text-mute); }
+  tr:hover .rename-ico { opacity: 1; }
+  .tag-edit { cursor: pointer; border-bottom: 1px dashed var(--text-mute); }
+  tr.board-row { cursor: pointer; }
+  tr.detail-row > td { background: var(--bg-soft); padding: 0; }
+  .detail-box { padding: 14px 18px; display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+  .detail-box .stat { background: var(--bg-panel); border: 1px solid var(--border-soft); border-radius: 8px; padding: 10px 12px; }
+  .detail-box .stat .v { font-size: 17px; font-weight: 700; }
+  .detail-box .stat .k { font-size: 11.5px; color: var(--text-mute); margin-top: 2px; }
+  .kind-list { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+
+  /* 网格视图卡片 */
+  .file-card { overflow: hidden; padding: 0; position: relative; }
+  .file-card .thumb-box { aspect-ratio: 16/9; border-radius: 0; border-bottom: 1px solid var(--border-soft); }
+  .file-card .info { padding: 11px 13px; }
+  .file-card .name { font-weight: 700; font-size: 14px; display: flex; align-items: center; gap: 6px; }
+  .file-card .sub { color: var(--text-mute); font-size: 12px; margin-top: 3px; }
+  .file-card .card-check { position: absolute; top: 8px; left: 8px; z-index: 2; width: 17px; height: 17px; accent-color: var(--accent); cursor: pointer; }
+  .file-card .card-acts { display: flex; gap: 6px; padding: 0 13px 12px; }
+  .file-card.selected { outline: 2px solid var(--accent); }
+
+  .ops-cell { display: flex; gap: 4px; flex-wrap: nowrap; }
+</style>
+</head>
+<body>
+<div class="wb-page">
+  <main class="wb-main">
+    <div class="wb-container">
+      <div class="wb-page-head">
+        <div>
+          <div class="wb-page-title">🗂 文件管理</div>
+          <div class="wb-page-sub">多白板切换 · 重命名 / 标签 / 副本 / 权限 / 删除 · 存储详情</div>
+        </div>
+        <span class="spacer"></span>
+        <span class="badge" id="total-badge">共 — 个</span>
+        <a class="btn" href="/index.html">＋ 新建白板</a>
+      </div>
+
+      <div class="switch-bar" id="switch-bar"></div>
+
+      <div class="toolbar">
+        <input class="input" id="q" placeholder="🔍 搜索名称…">
+        <select class="select" id="f-mode">
+          <option value="">全部模式</option>
+          <option value="board">🎨 白板</option>
+          <option value="mindmap">🧠 思维导图</option>
+        </select>
+        <select class="select" id="f-role">
+          <option value="">全部角色</option>
+          <option value="owner">所有者</option>
+          <option value="editor">可编辑</option>
+          <option value="commenter">可评论</option>
+          <option value="viewer">只读</option>
+        </select>
+        <select class="select" id="f-tag"><option value="">全部标签</option></select>
+        <select class="select" id="f-sort">
+          <option value="updated">最近更新</option>
+          <option value="created">创建时间</option>
+          <option value="name">名称</option>
+          <option value="size">图形数</option>
+        </select>
+        <span class="spacer"></span>
+        <div class="btn-group">
+          <button class="btn sm" id="view-table" title="表格视图">☰ 表格</button>
+          <button class="btn sm" id="view-grid" title="网格视图">▦ 网格</button>
+        </div>
+      </div>
+
+      <div class="bulk-bar" id="bulk-bar">
+        <span>已选 <b id="bulk-count">0</b> 个白板</span>
+        <span class="spacer"></span>
+        <button class="btn sm" id="bulk-tag">🏷 批量加标签</button>
+        <button class="btn sm danger" id="bulk-del">🗑 批量删除</button>
+        <button class="btn sm ghost" id="bulk-clear">取消选择</button>
+      </div>
+
+      <div id="content"></div>
+      <div id="empty-host"></div>
+    </div>
+  </main>
+</div>
+
+<script type="module">
+import { Api } from './js/api.js';
+import {
+  confirmDialog, debounce, escapeHtml, fmtBytes, fmtNum, fmtRel, fmtTime,
+  getMe, initPage, promptDialog, qs, toast,
+} from './js/ui.js';
+
+const me = await initPage('files', { gate: true, title: '文件管理' });
+
+if (me) main();
+
+async function main() {
+  let boards = [];
+  let view = 'table';
+  try { view = localStorage.getItem('wb_files_view') === 'grid' ? 'grid' : 'table'; } catch { /* 隐私模式 */ }
+  const filters = { q: '', mode: '', role: '', tag: '', sort: 'updated' };
+  const selected = new Set();
+  const statsCache = new Map();
+  let expandedId = null;
+  let pollErrorShown = false;
+  const currentBoard = qs('board');
+
+  const ROLE_BADGE = {
+    owner: '<span class="badge accent">所有者</span>',
+    editor: '<span class="badge green">可编辑</span>',
+    commenter: '<span class="badge yellow">可评论</span>',
+    viewer: '<span class="badge">只读</span>',
+  };
+
+  const editorHref = (b) => `/${b.mode === 'mindmap' ? 'mindmap' : 'editor'}.html?board=${encodeURIComponent(b.id)}`;
+  const canDelete = (b) => b.your_role === 'owner' || me.role === 'admin';
+
+  /* ------------------------------------------------------------ 数据加载 */
+  async function load(silent = false) {
+    try {
+      const data = await Api.boards.list();
+      boards = data.boards || [];
+      pollErrorShown = false;
+      renderAll();
+    } catch (err) {
+      if (!silent || !pollErrorShown) {
+        toast(err.message || '加载白板列表失败', 'error');
+        pollErrorShown = true;
+      }
+    }
+  }
+
+  function filtered() {
+    const q = filters.q.toLowerCase();
+    let list = boards.filter((b) => {
+      if (q && !(b.name || '').toLowerCase().includes(q)) return false;
+      if (filters.mode && b.mode !== filters.mode) return false;
+      if (filters.role && b.your_role !== filters.role) return false;
+      if (filters.tag && !(b.tags || []).includes(filters.tag)) return false;
+      return true;
+    });
+    const sorters = {
+      updated: (a, b) => (b.updated_at || 0) - (a.updated_at || 0),
+      created: (a, b) => (b.created_at || 0) - (a.created_at || 0),
+      name: (a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'zh'),
+      size: (a, b) => (b.stats?.shapes || 0) - (a.stats?.shapes || 0),
+    };
+    list = list.sort(sorters[filters.sort] || sorters.updated);
+    return list;
+  }
+
+  /* ------------------------------------------------------------ 快速切换条 */
+  function renderSwitchBar() {
+    const bar = document.getElementById('switch-bar');
+    const recent = [...boards].sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0)).slice(0, 6);
+    if (!recent.length) { bar.innerHTML = '<span class="small muted">暂无白板 — 到「白板列表」页新建一个开始协作</span>'; return; }
+    bar.innerHTML = `<span class="small muted nowrap" style="flex:none">最近:</span>` + recent.map((b) => `
+      <a class="switch-chip ${b.id === currentBoard ? 'current' : ''}" href="${editorHref(b)}" title="${escapeHtml(b.name)}">
+        ${b.mode === 'mindmap' ? '🧠' : '🎨'}<span>${escapeHtml(b.name)}</span>
+      </a>`).join('');
+  }
+
+  /* ------------------------------------------------------------ 筛选器选项 */
+  function renderTagOptions() {
+    const sel = document.getElementById('f-tag');
+    const tags = [...new Set(boards.flatMap((b) => b.tags || []))].sort((a, b) => a.localeCompare(b, 'zh'));
+    sel.innerHTML = '<option value="">全部标签</option>'
+      + tags.map((t) => `<option value="${escapeHtml(t)}" ${filters.tag === t ? 'selected' : ''}>#${escapeHtml(t)}</option>`).join('');
+  }
+
+  /* ------------------------------------------------------------ 表格视图 */
+  function renderTable(list) {
+    const allChecked = list.length > 0 && list.every((b) => selected.has(b.id));
+    return `
+    <div class="table-wrap">
+      <table class="wb-table">
+        <thead><tr>
+          <th style="width:34px"><input type="checkbox" id="check-all" ${allChecked ? 'checked' : ''}></th>
+          <th>名称</th><th>模式</th><th>我的角色</th><th>标签</th>
+          <th>图形</th><th>rev</th><th>更新时间</th><th>所有者</th><th style="width:230px">操作</th>
+        </tr></thead>
+        <tbody>
+        ${list.map((b) => `
+          <tr class="board-row" data-id="${b.id}">
+            <td><input type="checkbox" class="row-check" data-id="${b.id}" ${selected.has(b.id) ? 'checked' : ''}></td>
+            <td class="name-cell">
+              <span class="name-link" data-open="${b.id}" title="双击打开">${escapeHtml(b.name)}</span>
+              <span class="rename-ico" data-rename="${b.id}" title="重命名">✏️</span>
+              ${b.id === expandedId ? '<span class="small muted"> ▾</span>' : ''}
+            </td>
+            <td>${b.mode === 'mindmap' ? '<span class="badge purple">🧠 导图</span>' : '<span class="badge accent">🎨 白板</span>'}</td>
+            <td>${ROLE_BADGE[b.your_role] || ''}</td>
+            <td><span class="tag-edit" data-tags="${b.id}" title="点击编辑标签">${(b.tags || []).length
+              ? (b.tags || []).map((t) => `<span class="tag">#${escapeHtml(t)}</span>`).join('')
+              : '<span class="small muted">＋ 标签</span>'}</span></td>
+            <td class="mono">${fmtNum(b.stats?.shapes)}</td>
+            <td class="mono muted">${fmtNum(b.stats?.rev)}</td>
+            <td title="${fmtTime(b.updated_at)}">${fmtRel(b.updated_at)}</td>
+            <td>@${escapeHtml(b.owner || '?')}</td>
+            <td><div class="ops-cell">
+              <a class="btn sm" href="${editorHref(b)}">打开</a>
+              <button class="btn sm" data-dup="${b.id}">副本</button>
+              <a class="btn sm" href="/permissions.html?board=${encodeURIComponent(b.id)}">权限</a>
+              ${canDelete(b) ? `<button class="btn sm danger" data-del="${b.id}">删除</button>` : ''}
+            </div></td>
+          </tr>
+          ${b.id === expandedId ? `<tr class="detail-row"><td colspan="10"><div class="detail-box" id="detail-${b.id}">
+            <div class="small muted">加载存储详情…</div></div></td></tr>` : ''}
+        `).join('')}
+        </tbody>
+      </table>
+    </div>`;
+  }
+
+  async function fillDetail(boardId) {
+    const host = document.getElementById(`detail-${boardId}`);
+    if (!host) return;
+    let stats = statsCache.get(boardId);
+    if (!stats) {
+      try { stats = await Api.boards.stats(boardId); statsCache.set(boardId, stats); }
+      catch (err) { host.innerHTML = `<div class="small" style="color:var(--red)">加载失败: ${escapeHtml(err.message)}</div>`; return; }
+    }
+    const kinds = Object.entries(stats.doc?.by_kind || {}).map(([k, n]) => `<span class="tag">${escapeHtml(k)} ×${n}</span>`).join('');
+    host.innerHTML = `
+      <div class="stat"><div class="v">${fmtBytes(stats.storage?.total_bytes)}</div><div class="k">目录总占用</div></div>
+      <div class="stat"><div class="v">${fmtBytes(stats.storage?.ops_bytes)}</div><div class="k">操作日志(JSONL 分片)</div></div>
+      <div class="stat"><div class="v">${stats.shards?.length ?? 0}</div><div class="k">近 24 小时分片数</div></div>
+      <div class="stat"><div class="v">${stats.storage?.snapshots ?? 0}</div><div class="k">快照数(${fmtBytes(stats.storage?.snapshot_bytes)})</div></div>
+      <div class="stat"><div class="v">rev ${fmtNum(stats.doc?.rev)}</div><div class="k">
+        ${stats.loaded_in_memory ? '<span class="badge green">内存热加载</span>' : '<span class="badge">已卸载(按需重建)</span>'}</div></div>
+      <div class="stat"><div class="v">${fmtNum(stats.doc?.shapes)} 活跃</div><div class="k">墓碑 ${fmtNum(stats.doc?.tombstones)}</div></div>
+      <div style="grid-column:1/-1"><div class="small muted mb8">图形构成 · 最近操作 ${fmtTime(stats.doc?.last_op_ts, true)}</div>
+        <div class="kind-list">${kinds || '<span class="small muted">空</span>'}</div></div>`;
+  }
+
+  /* ------------------------------------------------------------ 网格视图 */
+  function renderGrid(list) {
+    return `<div class="grid cols-4">${list.map((b) => `
+      <div class="card file-card ${selected.has(b.id) ? 'selected' : ''}" data-id="${b.id}">
+        <input type="checkbox" class="card-check row-check" data-id="${b.id}" ${selected.has(b.id) ? 'checked' : ''}>
+        <div class="thumb-box" data-open="${b.id}" style="cursor:pointer">
+          ${b.thumbnail ? `<img src="${b.thumbnail}" alt="">` : `<span class="placeholder">${b.mode === 'mindmap' ? '🧠' : '🎨'}</span>`}
+        </div>
+        <div class="info" data-open="${b.id}" style="cursor:pointer">
+          <div class="name">${escapeHtml(b.name)} ${ROLE_BADGE[b.your_role] || ''}</div>
+          <div class="sub">${fmtRel(b.updated_at)} · ${fmtNum(b.stats?.shapes)} 图形 · @${escapeHtml(b.owner || '?')}</div>
+          <div style="margin-top:5px">${(b.tags || []).map((t) => `<span class="tag">#${escapeHtml(t)}</span>`).join('')}</div>
+        </div>
+        <div class="card-acts">
+          <a class="btn sm" href="${editorHref(b)}">打开</a>
+          <button class="btn sm" data-dup="${b.id}">副本</button>
+          <a class="btn sm" href="/permissions.html?board=${encodeURIComponent(b.id)}">权限</a>
+          ${canDelete(b) ? `<button class="btn sm danger" data-del="${b.id}">删</button>` : ''}
+        </div>
+      </div>`).join('')}</div>`;
+  }
+
+  /* ------------------------------------------------------------ 渲染入口 */
+  function renderAll() {
+    renderSwitchBar();
+    renderTagOptions();
+    document.getElementById('total-badge').textContent = `共 ${boards.length} 个`;
+    document.getElementById('view-table').classList.toggle('active', view === 'table');
+    document.getElementById('view-grid').classList.toggle('active', view === 'grid');
+    const list = filtered();
+    const content = document.getElementById('content');
+    const emptyHost = document.getElementById('empty-host');
+    content.innerHTML = list.length ? (view === 'table' ? renderTable(list) : renderGrid(list)) : '';
+    emptyHost.innerHTML = list.length ? '' : `
+      <div class="empty-state">
+        <div class="icon">🗂</div>
+        <div class="title">${boards.length ? '没有符合筛选条件的白板' : '还没有白板'}</div>
+        <div>${boards.length ? '试试调整搜索或筛选条件' : '到「白板列表」页新建, 或从模板库快速开始'}</div>
+      </div>`;
+    bindContentEvents(list);
+    renderBulkBar();
+    if (expandedId && view === 'table') fillDetail(expandedId);
+  }
+
+  function renderBulkBar() {
+    const bar = document.getElementById('bulk-bar');
+    bar.classList.toggle('show', selected.size > 0);
+    document.getElementById('bulk-count').textContent = selected.size;
+  }
+
+  /* ------------------------------------------------------------ 事件绑定 */
+  function bindContentEvents(list) {
+    const content = document.getElementById('content');
+
+    content.querySelectorAll('.row-check').forEach((el) => {
+      el.addEventListener('click', (e) => e.stopPropagation());
+      el.onchange = () => {
+        if (el.checked) selected.add(el.dataset.id); else selected.delete(el.dataset.id);
+        renderBulkBar();
+        if (view === 'grid') {
+          el.closest('.file-card')?.classList.toggle('selected', el.checked);
+        }
+      };
+    });
+
+    const checkAll = document.getElementById('check-all');
+    if (checkAll) {
+      checkAll.onchange = () => {
+        list.forEach((b) => { if (checkAll.checked) selected.add(b.id); else selected.delete(b.id); });
+        renderAll();
+      };
+    }
+
+    content.querySelectorAll('[data-open]').forEach((el) => {
+      el.addEventListener('dblclick', () => { location.href = editorHref(boards.find((b) => b.id === el.dataset.open)); });
+      el.addEventListener('click', (e) => {
+        if (view === 'grid') { location.href = editorHref(boards.find((b) => b.id === el.dataset.open)); return; }
+        if (e.detail === 1) return;    // 表格单击留给行展开, 双击打开
+      });
+    });
+
+    content.querySelectorAll('[data-rename]').forEach((el) => {
+      el.onclick = async (e) => {
+        e.stopPropagation();
+        const b = boards.find((x) => x.id === el.dataset.rename);
+        const name = await promptDialog('白板名称', { title: '重命名', value: b.name });
+        if (name && name !== b.name) {
+          try { await Api.boards.patch(b.id, { name }); toast('已重命名', 'success'); load(true); }
+          catch (err) { toast(err.message || '重命名失败', 'error'); }
+        }
+      };
+    });
+
+    content.querySelectorAll('[data-tags]').forEach((el) => {
+      el.onclick = async (e) => {
+        e.stopPropagation();
+        const b = boards.find((x) => x.id === el.dataset.tags);
+        const input = await promptDialog('标签(逗号分隔)', { title: `编辑标签 · ${b.name}`, value: (b.tags || []).join(', ') });
+        if (input === null) return;
+        const tags = input.split(/[,，]/).map((s) => s.trim()).filter(Boolean).slice(0, 10);
+        try { await Api.boards.patch(b.id, { tags }); toast('标签已更新', 'success'); load(true); }
+        catch (err) { toast(err.message || '更新标签失败', 'error'); }
+      };
+    });
+
+    content.querySelectorAll('[data-dup]').forEach((el) => {
+      el.onclick = async (e) => {
+        e.stopPropagation();
+        const b = boards.find((x) => x.id === el.dataset.dup);
+        try {
+          const data = await Api.boards.duplicate(b.id, `${b.name} 副本`);
+          toast(`已创建副本「${data.board.name}」`, 'success');
+          load(true);
+        } catch (err) { toast(err.message || '创建副本失败', 'error'); }
+      };
+    });
+
+    content.querySelectorAll('[data-del]').forEach((el) => {
+      el.onclick = async (e) => {
+        e.stopPropagation();
+        const b = boards.find((x) => x.id === el.dataset.del);
+        await deleteBoards([b]);
+      };
+    });
+
+    content.querySelectorAll('tr.board-row').forEach((tr) => {
+      tr.onclick = (e) => {
+        if (e.target.closest('button,input,a,.tag-edit,.rename-ico')) return;
+        expandedId = expandedId === tr.dataset.id ? null : tr.dataset.id;
+        renderAll();
+      };
+    });
+  }
+
+  async function deleteBoards(targets) {
+    if (!targets.length) return;
+    const ok = await confirmDialog(
+      targets.length === 1
+        ? `删除白板「${targets[0].name}」? 全部画布数据、操作历史与聊天记录将被移除, 不可恢复。`
+        : `删除选中的 ${targets.length} 个白板? 不可恢复。`,
+      { title: '删除确认', danger: true });
+    if (!ok) return;
+    let done = 0;
+    for (const b of targets) {
+      try { await Api.boards.remove(b.id); done += 1; selected.delete(b.id); }
+      catch (err) { toast(`「${b.name}」删除失败: ${err.message}`, 'error'); }
+    }
+    if (done) { toast(`已删除 ${done} 个白板`, 'success'); if (expandedId) expandedId = null; load(true); }
+  }
+
+  /* ------------------------------------------------------------ 工具栏事件 */
+  document.getElementById('q').addEventListener('input', debounce((e) => { filters.q = e.target.value.trim(); renderAll(); }, 220));
+  document.getElementById('f-mode').onchange = (e) => { filters.mode = e.target.value; renderAll(); };
+  document.getElementById('f-role').onchange = (e) => { filters.role = e.target.value; renderAll(); };
+  document.getElementById('f-tag').onchange = (e) => { filters.tag = e.target.value; renderAll(); };
+  document.getElementById('f-sort').onchange = (e) => { filters.sort = e.target.value; renderAll(); };
+
+  const setView = (v) => {
+    view = v;
+    try { localStorage.setItem('wb_files_view', v); } catch { /* 隐私模式 */ }
+    renderAll();
+  };
+  document.getElementById('view-table').onclick = () => setView('table');
+  document.getElementById('view-grid').onclick = () => setView('grid');
+
+  document.getElementById('bulk-clear').onclick = () => { selected.clear(); renderAll(); };
+  document.getElementById('bulk-del').onclick = async () => {
+    const targets = boards.filter((b) => selected.has(b.id) && canDelete(b));
+    const skipped = selected.size - targets.length;
+    if (skipped > 0) toast(`${skipped} 个白板不是您拥有的, 已跳过`, 'warn');
+    await deleteBoards(targets);
+  };
+  document.getElementById('bulk-tag').onclick = async () => {
+    const input = await promptDialog('要添加的标签(逗号分隔)', { title: `为 ${selected.size} 个白板添加标签` });
+    if (input === null) return;
+    const add = input.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
+    if (!add.length) return;
+    let done = 0;
+    for (const b of boards.filter((x) => selected.has(x.id))) {
+      const tags = [...new Set([...(b.tags || []), ...add])].slice(0, 10);
+      try { await Api.boards.patch(b.id, { tags }); done += 1; }
+      catch (err) { toast(`「${b.name}」标签更新失败: ${err.message}`, 'error'); }
+    }
+    if (done) { toast(`已为 ${done} 个白板添加标签`, 'success'); load(true); }
+  };
+
+  /* ------------------------------------------------------------ 启动与轮询 */
+  await load();
+  setInterval(() => load(true), 30_000);   // 30s 静默轮询(失败只提示一次)
+}
+</script>
+</body>
+</html>
