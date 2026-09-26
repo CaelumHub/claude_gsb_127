@@ -3,8 +3,8 @@
 回放策略(快速回放):
 - /replay?rev=R 返回「≤R 的最近快照 + 快照之后到 R 的操作」, 播放器
   以快照为底、顺序折叠操作即可到达任意时刻, 无需从零重放。
-- coalesce=true 用于拖动进度条/高倍速: 合并同站点同图形时间窗内的
-  连续 move 增量, 长拖拽一步到位。
+- coalesce=true 用于拖动进度条/高倍速: 仅合并同一用户对同一图形、时间
+  窗内、且中间没有夹属性修改等其他操作的连续 move 增量, 长拖拽一步到位。
 - /ops 分页拉取供播放器向后流式加载与「操作列表」面板展示。
 """
 from __future__ import annotations
@@ -69,7 +69,7 @@ async def history_ops(board_id: str,
     if author:
         ops = [o for o in ops if (o.get("by") or "") == author or (o.get("site") or "") == author]
     if coalesce:
-        ops = coalesce_moves(ops, config.MOVE_COALESCE_WINDOW_MS * 60)
+        ops = coalesce_moves(ops, config.MOVE_COALESCE_WINDOW_MS)
     return {
         "ops": ops[:limit],
         "count": len(ops),

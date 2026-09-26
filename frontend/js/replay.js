@@ -14,7 +14,7 @@
    - 流式: 操作按页(500 条)拉取, 播放到页尾自动续拉。
    ================================================================ */
 import { Api } from './api.js';
-import { mergeOp } from './crdt-client.js';
+import { mergeOp, q6 } from './crdt-client.js';
 
 const BASE_OPS_PER_SEC = 14;          // 1x 速度下每秒折叠的操作数
 const PAGE_SIZE = 500;
@@ -33,42 +33,65 @@ export const OP_TYPE_META = {
   batch: { color: '#8a93a5', label: '批量' },
 };
 
-/** 与服务端 coalesce_moves 同规则的客户端合并(快进用) */
+/** 操作归属用户键: 优先用服务端盖章的 by, 缺失时退回站点 ID(与服务端一致) */
+function opUserKey(op) {
+  return String(op.by || op.site || '');
+}
+
+/** 收集操作(含 batch 子操作)直接寻址的图形 id(与服务端 _op_targets 一致) */
+function opTargets(op) {
+  if (op.type === 'batch') {
+    return (op.ops || [])
+      .map((sub) => sub.id || sub.shape?.id)
+      .filter(Boolean)
+      .map(String);
+  }
+  const sid = op.id || op.shape?.id;
+  return sid ? [String(sid)] : [];
+}
+
+/**
+ * 与服务端 coalesce_moves 同规则的客户端合并(快进用):
+ * 仅合并「同一用户(by, 退回 site)、同一图形、相邻 move 均在时间窗内、
+ * 且中间没有夹任何针对该图形的其他操作(含 set_props 改色/改字)」的连续 move。
+ */
 export function coalesceMoves(ops, windowMs = COALESCE_WINDOW_MS) {
   const out = [];
-  const pending = new Map();          // `${site}|${id}` → op
-  const flushKey = (key) => {
-    const agg = pending.get(key);
-    if (agg) { out.push(agg); pending.delete(key); }
+  // 嵌套 Map: userKey → (shapeId → op), 精确按「用户+图形」两段寻址,
+  // 不能用 `${user}|${id}` 配 endsWith(id)(图形 id 互为后缀时会误冲断)
+  const pending = new Map();
+  const bucket = (userKey) => {
+    let m = pending.get(userKey);
+    if (!m) { m = new Map(); pending.set(userKey, m); }
+    return m;
   };
-  const flushAll = () => { for (const key of [...pending.keys()]) flushKey(key); };
+  const flushKeyOf = (m, id) => { const agg = m.get(id); if (agg) { out.push(agg); m.delete(id); } };
+  const flushShape = (id) => {
+    for (const m of pending.values()) if (m.has(id)) flushKeyOf(m, id);
+  };
   for (const op of ops) {
     if (op.type === 'move') {
-      const key = `${op.site}|${op.id}`;
-      const agg = pending.get(key);
+      const userKey = opUserKey(op);
+      const m = bucket(userKey);
+      const agg = m.get(op.id);
+      // 滑动时间窗: 相对聚合段内上一条 move, 相邻间隔均需 ≤ 窗口
       if (agg && (op.ts || 0) - (agg.ts || 0) <= windowMs) {
-        agg.dx = (agg.dx || 0) + (op.dx || 0);
-        agg.dy = (agg.dy || 0) + (op.dy || 0);
+        agg.dx = q6((agg.dx || 0) + (op.dx || 0));
+        agg.dy = q6((agg.dy || 0) + (op.dy || 0));
         agg.ts = op.ts;
+        agg.rev = op.rev;
         agg._merged = (agg._merged || 1) + 1;
         continue;
       }
-      flushKey(key);
-      pending.set(key, { ...op });
+      if (agg) out.push(agg);
+      m.set(op.id, { ...op });
       continue;
     }
-    const target = op.id;
-    if (target) {
-      for (const key of [...pending.keys()]) if (key.endsWith(`|${target}`)) flushKey(key);
-    }
-    if (op.type === 'batch') {
-      for (const sub of op.ops || []) {
-        if (sub.id) for (const key of [...pending.keys()]) if (key.endsWith(`|${sub.id}`)) flushKey(key);
-      }
-    }
+    // 任何(含 batch 子操作)寻址到该图形的中间操作都冲断该图形的合并链
+    for (const id of opTargets(op)) flushShape(id);
     out.push(op);
   }
-  flushAll();
+  for (const m of pending.values()) for (const agg of m.values()) out.push(agg);
   return out;
 }
 
@@ -251,16 +274,20 @@ export class ReplayPlayer {
         break;                                   // 等待下一页, 下帧继续
       }
       if (fast && op.type === 'move') {
-        // 快进: 合并同图形同站点时间窗内的连续 move
+        // 快进: 仅合并「同一用户、同一图形、相邻时间窗内、且中间没有夹
+        // 任何针对该图形的其他操作(改色/改字等)」的连续 move
+        const userKey = opUserKey(op);
         let dx = op.dx || 0; let dy = op.dy || 0;
         let j = this.ops.indexOf(op) + 1;
         let merged = 1;
+        let lastTs = op.ts || 0;
         let lastRev = op.rev;
         while (j < this.ops.length && merged < budget) {
           const nxt = this.ops[j];
-          if (nxt.type === 'move' && nxt.id === op.id && nxt.site === op.site
-            && (nxt.ts || 0) - (op.ts || 0) <= COALESCE_WINDOW_MS) {
-            dx += nxt.dx || 0; dy += nxt.dy || 0;
+          if (nxt.type === 'move' && nxt.id === op.id && opUserKey(nxt) === userKey
+            && (nxt.ts || 0) - lastTs <= COALESCE_WINDOW_MS) {
+            dx = q6(dx + (nxt.dx || 0)); dy = q6(dy + (nxt.dy || 0));
+            lastTs = nxt.ts || 0;
             lastRev = nxt.rev; merged += 1; j += 1;
           } else break;
         }

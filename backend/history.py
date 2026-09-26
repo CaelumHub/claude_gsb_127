@@ -8,11 +8,13 @@
 - 每 N 个操作(或 N 秒)折叠一次全量状态到 snapshots/<rev>.json。
   回放到任意时刻 = 找最近的 ≤rev 快照 + 顺序折叠其后的操作, 而不是
   从零重放全部历史 —— 快照间隔 200 时, 任意跳转最多折叠 200 个操作。
-- coalesce_moves 在「快进/拖动进度条」场景把同站点同图形时间窗内的
-  连续 move 增量合并为一步, 大段拖拽回放不再逐像素重演。
+- coalesce_moves 在「快进/拖动进度条」场景把同一用户对同一图形、时间
+  窗内、且中间没有夹属性修改等其他操作的连续 move 增量合并为一步,
+  大段拖拽回放不再逐像素重演。
 - compact_archived: 对「完全位于最新快照之下且不再属于今天」的归档
-  分片做物理压缩(合并 move、丢弃被覆盖的 set_props 旧值), 终态等价,
-  存储量随编辑时长不再线性膨胀。压缩通过 tmp+rename 原子重写分片。
+  分片做物理压缩(合并满足上述条件的 move、丢弃被覆盖的 set_props
+  旧值), 终态等价, 存储量随编辑时长不再线性膨胀。压缩通过
+  tmp+rename 原子重写分片。
 """
 from __future__ import annotations
 
@@ -45,7 +47,17 @@ class BoardHistory:
         if not ops:
             return None
         ts = ops[0].get("ts")
-        return self.log.append(ops, ts_ms=ts)
+        name = self.log.append(ops, ts_ms=ts)
+        self.invalidate_shard(name)
+        return name
+
+    def invalidate_shard(self, name: str) -> None:
+        """分片被追加/重写后丢弃其元信息缓存。
+
+        不能依赖 (size, mtime) 轮询判等: 同一进程内连续快速追加可能落在
+        同一个 mtime 纳秒上, 甚至字节数也碰巧不变, 会沿用到旧的 rev 区间。
+        """
+        SHARD_META_CACHE.pop(shard_cache_key(self.log.shard_path(name)), None)
 
     def flush(self) -> None:
         name = self.log.shard_name()
@@ -60,7 +72,9 @@ class BoardHistory:
             return {"name": name, "count": 0}
         cache_key = shard_cache_key(path)
         cached = SHARD_META_CACHE.get(cache_key)
-        if cached:
+        # (size, mtime) 失效校验: 追加写后分片变大/更新必须重读,
+        # 否则会沿用到「只有旧记录」的 first/last_rev 区间, 漏读新操作
+        if cached and cached.get("size") == st.st_size and cached.get("mtime_ns") == st.st_mtime_ns:
             return cached
         records = self.log.read_shard(name)
         revs = [r.get("rev", 0) for r in records if r.get("rev")]
@@ -69,6 +83,7 @@ class BoardHistory:
             "name": name,
             "count": len(records),
             "size": st.st_size,
+            "mtime_ns": st.st_mtime_ns,
             "first_rev": min(revs) if revs else None,
             "last_rev": max(revs) if revs else None,
             "first_ts": min(tss) if tss else None,
@@ -83,20 +98,25 @@ class BoardHistory:
     # ---------------------------------------------------------------- 读取
     def iter_ops(self, from_rev: int = 0, to_rev: Optional[int] = None,
                  limit: Optional[int] = None) -> List[Dict[str, Any]]:
-        """按 rev 升序返回 (from_rev, to_rev] 区间的操作(线性扫相关分片)。"""
+        """按 rev 升序返回 (from_rev, to_rev] 区间的操作(线性扫相关分片)。
+
+        分片按时间(小时)切分而 rev 是全序的: 跨小时边界/迟到补发会让
+        相邻分片的 rev 区间发生交叠, 因此不能按「分片最大 rev ≤ 起点」
+        整段跳过(可能漏掉小时更早却含更高 rev 的分片)。这里仅按
+        to_rev 对最小 rev 已越过终点的分片提前结束扫描, 其余逐条按
+        rev 过滤, 最终统一排序保证全序。
+        """
         out: List[Dict[str, Any]] = []
         for meta in self.shards_index():
-            last = meta.get("last_rev")
             first = meta.get("first_rev")
-            if last is None or last <= from_rev:
-                continue
             if to_rev is not None and first is not None and first > to_rev:
                 break
             for rec in self.log.read_shard(meta["name"]):
                 rev = rec.get("rev") or 0
-                if rev > from_rev and (to_rev is None or rev <= to_rev) and rec.get("type") != "move":
+                if rev > from_rev and (to_rev is None or rev <= to_rev):
                     out.append(rec)
                     if limit and len(out) >= limit:
+                        out.sort(key=lambda r: r.get("rev") or 0)
                         return out
         out.sort(key=lambda r: r.get("rev") or 0)
         return out
@@ -195,7 +215,9 @@ class BoardHistory:
         """
         snapshot = self.load_snapshot(at_rev)
         base_rev = int((snapshot or {}).get("rev") or 0)
-        ops = self.iter_ops(from_rev=base_rev + 1, to_rev=at_rev, limit=page_limit)
+        # iter_ops 区间为 (from_rev, to_rev]: 快照已含 ≤base_rev 的状态,
+        # 故下界传 base_rev 本身(而非 base_rev+1), 否则会漏掉快照后第一条
+        ops = self.iter_ops(from_rev=base_rev, to_rev=at_rev, limit=page_limit)
         if coalesce:
             from .crdt import coalesce_moves
             ops = coalesce_moves(ops, config.MOVE_COALESCE_WINDOW_MS)
@@ -235,10 +257,10 @@ class BoardHistory:
             if last_rev >= snap_rev or stamp.startswith(today_prefix):
                 continue                       # 快照之上或今天的分片保持原样
             records = self.log.read_shard(name)
-            compacted = compact_ops_lossy(records, config.MOVE_COALESCE_WINDOW_MS * 60)
+            compacted = compact_ops_lossy(records, config.MOVE_COALESCE_WINDOW_MS)
             if len(compacted) < len(records):
                 self.log.rewrite_shard(name, compacted)
-                SHARD_META_CACHE.pop(self.log.shard_path(name), None)   # noqa: 保持原路径弹出协议
+                self.invalidate_shard(name)
                 compacted_shards += 1
                 ops_removed += len(records) - len(compacted)
         return {"compacted_shards": compacted_shards, "ops_removed": ops_removed}
@@ -248,7 +270,7 @@ class BoardHistory:
         cutoff = int(time.time() * 1000) - days * 86400_000
         removed = self.log.prune_before(cutoff)
         for name in removed:
-            SHARD_META_CACHE.pop(self.log.shard_path(name), None)
+            self.invalidate_shard(name)
         return removed
 
     # ---------------------------------------------------------------- 统计

@@ -658,49 +658,79 @@ def invert_ops(ops: List[Dict[str, Any]], state_before: Dict[str, Dict[str, Any]
 
 
 # ---------------------------------------------------------------- 历史压缩
-def coalesce_moves(ops: List[Dict[str, Any]], window_ms: int = 900) -> List[Dict[str, Any]]:
-    """合并「同站点、同图形、时间窗内」的连续 move 增量(回放加速/归档压缩)。
+def _op_user_key(op: Dict[str, Any]) -> str:
+    """操作归属用户键: 优先用服务端盖章的 by(同一用户的不同站点也按一人
+    计, 不允许跨设备合并); 缺失时(种子/历史旧数据)退回站点 ID。"""
+    return str(op.get("by") or op.get("site") or "")
 
-    仅当中间没有夹杂其他针对同一图形的操作时才合并, 保证可视语义不变。
+
+def _op_targets(op: Dict[str, Any]) -> List[str]:
+    """收集操作(含 batch 子操作)直接寻址的图形 id。"""
+    otype = op.get("type")
+    if otype == "batch":
+        out: List[str] = []
+        for sub in op.get("ops", []):
+            sid = sub.get("id") or (sub.get("shape") or {}).get("id")
+            if sid:
+                out.append(str(sid))
+        return out
+    sid = op.get("id") or (op.get("shape") or {}).get("id")
+    return [str(sid)] if sid else []
+
+
+def coalesce_moves(ops: List[Dict[str, Any]], window_ms: int = 900) -> List[Dict[str, Any]]:
+    """合并「同一用户、同一图形、时间窗内、且中间没有夹任何针对该图形的
+    其他操作」的连续 move 增量(回放加速/归档压缩)。
+
+    合并条件(缺一不可):
+    - 同一用户: 按 by(退回 site)区分, 不同用户对同一图形的并发拖动不合并;
+    - 同一图形: 键含图形 id;
+    - 时间窗内: 相邻 move 的 ts 增量均 ≤ window_ms(滑动窗口, 不是相对首条);
+    - 连续性: 中间一旦出现针对该图形的任意其他操作(含 set_props 改色/改字、
+      删除、层级、batch 子操作等), 立即冲掉待聚合段, 绝不跨过属性修改合并。
+
+    针对「其他图形」的操作不影响本图形的合并链(move 增量与它们无顺序依赖)。
+    合并仅累加 delta, 终态与逐帧折叠严格一致。
     """
     out: List[Dict[str, Any]] = []
-    pending: Dict[str, Dict[str, Any]] = {}       # key → 聚合中的 move op
+    pending: Dict[Tuple[str, str], Dict[str, Any]] = {}  # (用户, 图形) → 聚合中的 move
 
-    def flush(key: Optional[str] = None) -> None:
-        if key is None:
-            for k in list(pending):
-                out.append(pending.pop(k))
-        elif key in pending:
+    def flush_key(key: Tuple[str, str]) -> None:
+        if key in pending:
             out.append(pending.pop(key))
+
+    def flush_shape(shape_id: str) -> None:
+        """任何中间操作碰到该图形, 冲掉该图形所有用户的待聚合 move。"""
+        for key in [k for k in pending if k[1] == shape_id]:
+            flush_key(key)
 
     for op in ops:
         otype = op.get("type")
         if otype == "move":
-            key = f"{op.get('site')}|{op.get('id')}"
+            target = str(op.get("id") or "")
+            key = (_op_user_key(op), target)
             agg = pending.get(key)
-            if agg is not None and op.get("ts", 0) - agg.get("ts", 0) <= window_ms:
-                agg["dx"] = float(agg.get("dx") or 0) + float(op.get("dx") or 0)
-                agg["dy"] = float(agg.get("dy") or 0) + float(op.get("dy") or 0)
+            # 滑动时间窗: 相对聚合段内「上一条」move 的 ts, 保证每段相邻
+            # 间隔都在窗内, 长拖拽中间停顿超过窗口必然断开
+            if agg is not None and int(op.get("ts") or 0) - int(agg.get("ts") or 0) <= window_ms:
+                agg["dx"] = round(float(agg.get("dx") or 0) + float(op.get("dx") or 0), 6)
+                agg["dy"] = round(float(agg.get("dy") or 0) + float(op.get("dy") or 0), 6)
                 agg["ts"] = op.get("ts")
+                agg["rev"] = op.get("rev")          # 折叠区间到最后一条 rev
                 agg["_merged"] = int(agg.get("_merged") or 1) + 1
-                agg["op_id"] = op.get("op_id")     # 用最后一个 op_id 代表该段
+                agg["op_id"] = op.get("op_id")      # 用最后一个 op_id 代表该段
                 continue
-            flush(key)
+            flush_key(key)
             pending[key] = dict(op)
             continue
-        # 非 move 操作: 冲掉与同一图形相关的 pending, 保证顺序语义
-        target = op.get("id")
-        if target and op.get("type") != "set_props":
-            for key in [k for k in pending if k.endswith(f"|{target}")]:
-                flush(key)
-        if otype == "batch":
-            for sub in op.get("ops", []):
-                st = sub.get("id")
-                if st:
-                    for key in [k for k in pending if k.endswith(f"|{st}")]:
-                        flush(key)
+        # 非 move 操作: 只要它(或 batch 内的子操作)寻址到某图形, 就冲掉
+        # 该图形的待聚合 move —— set_props(改色/改字/x/y)同样冲断,
+        # 保证属性修改不可能被跨过去
+        for shape_id in _op_targets(op):
+            flush_shape(shape_id)
         out.append(op)
-    flush()
+    for key in list(pending):
+        flush_key(key)
     return out
 
 
